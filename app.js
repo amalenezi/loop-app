@@ -904,6 +904,8 @@ $('#members').addEventListener('click', async e => {
 $('#cloud-google').addEventListener('click', async () => {
   try {
     const c = cloud || await api('GET', '/__loop/api/cloud');
+    const st = await fetch(`${c.config.url}/auth/v1/settings`, { headers: { apikey: c.config.key } }).then(r => r.json()).catch(() => ({ external: { google: true } }));
+    if (!st.external?.google) { $('#invite-note').textContent = ''; toast('Google sign-in isn’t switched on yet. Enable the Google provider in Supabase (Authentication → Sign In / Providers).', 7000); return; }
     const sb = await supa(c.config);
     const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${location.origin}/__loop/?loop_auth=1` } });
     if (error) throw error;
