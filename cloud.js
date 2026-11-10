@@ -12,6 +12,10 @@ const rid = () => Math.random().toString(36).slice(2, 10);
 const COLORS = ['#2F5BFF', '#E5484D', '#1F9D55', '#D9A100', '#8E4EC6', '#0E9AA7', '#E8590C'];
 const GOOGLE = `<svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 009 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 013.68 9c0-.6.1-1.18.29-1.72V4.95H.96A9 9 0 000 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 00.96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>`;
 
+// Is Google sign-in switched on? (checked before redirecting, so nobody lands on a raw error page)
+async function googleEnabled() {
+  try { const r = await fetch(`${cfg.url}/auth/v1/settings`, { headers: { apikey: cfg.key } }); return !!(await r.json()).external?.google; } catch { return true; }
+}
 function show(html) { gate.hidden = false; body.innerHTML = html; }
 const profileOf = u => { const m = u?.user_metadata || {}; return { name: m.full_name || m.name || (u?.email || '').split('@')[0], avatar: m.avatar_url || m.picture || null, email: u?.email }; };
 
@@ -31,6 +35,7 @@ function signInScreen(note = '') {
     </details>
     <p class="g-note" id="g-note">${esc(note)}</p>`);
   document.getElementById('g-google').onclick = async () => {
+    if (!(await googleEnabled())) { document.getElementById('g-note').textContent = 'Google sign-in isn’t switched on for Loop yet. Use an email link for now.'; document.querySelector('.g-alt').open = true; return; }
     const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href } });
     if (error) document.getElementById('g-note').textContent = error.message.includes('provider is not enabled') ? 'Google sign-in isn’t switched on yet — use an email link for now.' : error.message;
   };
