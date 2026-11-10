@@ -352,7 +352,10 @@ function anchorFor(fid, lx, ly) {
   }
   return a;
 }
+const CANVAS = '__canvas'; // comments placed on the empty canvas
 function anchorPos(fid, a) {
+  if (fid === CANVAS) return { x: a.wx, y: a.wy };
+  if (a.scope === 'frame') return { x: a.x, y: a.y };
   const doc = frameDoc(fid);
   if (doc && a.selector) {
     try {
@@ -384,9 +387,11 @@ function threadStatus(rootId) {
   return t[t.length - 1]?.status || 'done';
 }
 function rootsOf(fid) { return S.comments.filter(c => c.frameId === fid && !c.parentId && c.kind !== 'create').sort((a, b) => a.createdAt - b.createdAt); }
-function renderAllPins() { for (const f of S.frames) renderPins(f.id); }
+function renderAllPins() { for (const f of S.frames) renderPins(f.id); renderPins(CANVAS); }
+function pinsBox(fid) { return fid === CANVAS ? $('#canvas-pins') : frameEls.get(fid)?.pins; }
 function renderPins(fid) {
-  const fe = frameEls.get(fid); if (!fe) return;
+  const box = pinsBox(fid); if (!box) return;
+  const fe = { pins: box };
   const roots = rootsOf(fid);
   const want = roots.map((c, i) => ({ key: c.id, n: i + 1, c }));
   if (draft?.frameId === fid) want.push({ key: '__draft', n: roots.length + 1, draft: true });
@@ -408,20 +413,21 @@ function renderPins(fid) {
   positionPins(fid);
 }
 function positionPins(fid) {
-  const fe = frameEls.get(fid); if (!fe || !S) return;
-  fe.pins.querySelectorAll('.pin').forEach(p => {
+  const box = pinsBox(fid); if (!box || !S) return;
+  box.querySelectorAll('.pin').forEach(p => {
     const a = p.dataset.key === '__draft' ? draft?.anchor : S.comments.find(c => c.id === p.dataset.key)?.anchor;
     if (!a) { p.hidden = true; return; }
     const { x, y } = anchorPos(fid, a);
     p.style.left = `${x}px`; p.style.top = `${y}px`;
     const f = S.frames.find(x => x.id === fid);
-    p.hidden = x < -4 || y < -4 || x > f.w + 4 || y > f.h + 4;
+    p.hidden = !!f && (x < -4 || y < -4 || x > f.w + 4 || y > f.h + 4);
   });
   if ((draft?.frameId === fid) || (openThreadId && S.comments.find(c => c.id === openThreadId)?.frameId === fid)) positionPops();
 }
 
 // screen position of a frame-local point
 function screenOf(fid, lx, ly) {
+  if (fid === CANVAS) return { x: view.x + lx * view.z, y: view.y + ly * view.z };
   const f = frameView(S.frames.find(x => x.id === fid));
   return { x: view.x + (f.x + lx) * view.z, y: view.y + (f.y + ly) * view.z };
 }
@@ -445,15 +451,13 @@ function positionPops() {
 
 // ---------- composer ----------
 function freshInk(fid) { return S.strokes.filter(s => s.frameId === fid && !s.commentId && myStrokes.has(s.id)); }
-function openComposer(fid, lx, ly) {
+// scope: 'element' (what you clicked), 'spot' (just that point), 'frame' (the whole frame), 'canvas' (empty canvas)
+function openComposer(fid, lx, ly, scope) {
   closeThread(); hideInkChip();
-  const anchor = anchorFor(fid, lx, ly);
+  const picked = fid === CANVAS ? null : anchorFor(fid, lx, ly);
   const strokes = freshInk(fid);
-  draft = { frameId: fid, anchor, inkStrokes: strokes.map(s => s.id) };
-  const f = S.frames.find(x => x.id === fid);
-  $('#composer-target').innerHTML = anchor.selector
-    ? `<b>${esc(anchor.label)}</b><span>${esc(anchor.text ? `“${anchor.text}”` : anchor.selector)}</span>`
-    : `<b>${esc(f.name)}</b><span>x ${Math.round(lx)}, y ${Math.round(ly)}</span>`;
+  draft = { frameId: fid, picked, lx, ly, inkStrokes: strokes.map(s => s.id) };
+  setScope(scope || (fid === CANVAS ? 'canvas' : picked?.selector ? 'element' : 'spot'));
   const chip = $('#composer-ink');
   chip.hidden = !strokes.length; chip.textContent = `${strokes.length} mark${strokes.length === 1 ? '' : 's'} attached`;
   composerInput.placeholder = isOwner()
@@ -463,6 +467,33 @@ function openComposer(fid, lx, ly) {
   renderPins(fid); positionPops();
   setTimeout(() => composerInput.focus(), 0);
 }
+function nearFrames(wx, wy) {
+  return S.frames.map(f => ({ f, d: Math.hypot(Math.max(f.x - wx, 0, wx - f.x - f.w), Math.max(f.y - wy, 0, wy - f.y - f.h)) }))
+    .sort((a, b) => a.d - b.d).slice(0, 2).filter(x => x.d < 1200).map(x => x.f.name);
+}
+function setScope(scope) {
+  const d = draft; if (!d) return;
+  const f = S.frames.find(x => x.id === d.frameId);
+  if (scope === 'element' && !d.picked?.selector) scope = 'spot';
+  d.scope = scope;
+  if (scope === 'canvas') d.anchor = { scope, wx: d.lx, wy: d.ly, near: nearFrames(d.lx, d.ly) };
+  else if (scope === 'frame') d.anchor = { scope, x: 18, y: 18 };
+  else if (scope === 'spot') d.anchor = { scope, x: d.lx, y: d.ly, sx: d.picked?.sx || 0, sy: d.picked?.sy || 0 };
+  else d.anchor = { ...d.picked, scope };
+  const t = d.anchor;
+  $('#composer-target').innerHTML = scope === 'canvas' ? `<b>Canvas</b><span>${t.near.length ? `near ${esc(t.near.join(', '))}` : 'general note'}</span>`
+    : scope === 'frame' ? `<b>${esc(f.name)}</b><span>whole frame</span>`
+    : scope === 'spot' ? `<b>${esc(f.name)}</b><span>this spot · x ${Math.round(d.lx)}, y ${Math.round(d.ly)}</span>`
+    : `<b>${esc(t.label)}</b><span>${esc(t.text ? `“${t.text}”` : t.selector)}</span>`;
+  const pick = $('#scope-pick');
+  pick.hidden = scope === 'canvas';
+  pick.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', b.dataset.scope === scope);
+    b.disabled = b.dataset.scope === 'element' && !d.picked?.selector;
+  });
+  renderPins(d.frameId); positionPops();
+}
+document.querySelectorAll('#scope-pick button').forEach(b => b.addEventListener('click', () => { setScope(b.dataset.scope); composerInput.focus(); }));
 function closeComposer() {
   const fid = draft?.frameId; draft = null; composer.hidden = true;
   if (fid) renderPins(fid);
@@ -481,7 +512,7 @@ async function sendDraft() {
   closeComposer();
   const strokes = S.strokes.filter(s => d.inkStrokes.includes(s.id));
   const body = { frameId: d.frameId, text, anchor: d.anchor, author: { name: me.name, color: me.color }, inkStrokes: d.inkStrokes };
-  if (strokes.length) Object.assign(body, inkContext(d.frameId, strokes));
+  if (strokes.length && d.frameId !== CANVAS) Object.assign(body, inkContext(d.frameId, strokes));
   try {
     await api('POST', '/__loop/api/comments', body);
     if (!isOwner()) toast('Comment added — the host will send it to the agent');
@@ -578,7 +609,7 @@ function renderThread() {
       ${agentLine(c)}
     </div>`).join('');
   threadEl.innerHTML = `
-    <div class="thread-head"><span class="t-title">#${n} · ${esc(f?.name || '')}</span>
+    <div class="thread-head"><span class="t-title">#${n} · ${esc(f?.name || (root.frameId === CANVAS ? 'Canvas' : ''))}${root.anchor?.scope === 'frame' ? ' · whole frame' : ''}</span>
       <span class="t-actions">
         <button class="icon-btn" data-act="resolve" title="${root.resolved ? 'Reopen' : 'Resolve'}">${root.resolved ? '↺' : '✓'}</button>
         <button class="icon-btn" data-act="delete" title="Delete thread">⌫</button>
@@ -637,8 +668,10 @@ vp.addEventListener('pointerdown', e => {
   if (tool === 'pen') return startStroke(e);
   if (tool === 'erase') { gesture = { type: 'erase' }; eraseAt(e); vp.setPointerCapture(e.pointerId); return; }
   if (tool === 'comment') {
-    if (fid && e.target.closest('.frame-body')) { const { lx, ly } = localFromClient(fid, e.clientX, e.clientY); openComposer(fid, lx, ly); }
-    else { closeComposer(); closeThread(); }
+    if (fid && e.target.closest('.frame-body')) { const { lx, ly } = localFromClient(fid, e.clientX, e.clientY); openComposer(fid, lx, ly, e.altKey ? 'spot' : undefined); }
+    else if (fid && e.target.closest('.frame-label')) openComposer(fid, 18, 18, 'frame');
+    else if (!composer.hidden || openThreadId) { closeComposer(); closeThread(); }
+    else { const w = toWorld(e.clientX, e.clientY); openComposer(CANVAS, w.x, w.y, 'canvas'); }
     return;
   }
   // select
@@ -683,7 +716,13 @@ vp.addEventListener('pointermove', e => {
   if (!gesture) {
     if (tool === 'comment') {
       const fid = e.target.closest('.frame-body') && e.target.closest('.frame')?.dataset.id;
-      if (fid) showHover(fid, e.clientX, e.clientY); else hoverBox.hidden = true;
+      const lfid = !fid && e.target.closest('.frame-label') && e.target.closest('.frame')?.dataset.id;
+      if (fid) showHover(fid, e.clientX, e.clientY);
+      else if (lfid) {
+        const r = frameEls.get(lfid).iframe.getBoundingClientRect();
+        Object.assign(hoverBox.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+        hoverBox.dataset.tag = 'whole frame'; hoverBox.hidden = false;
+      } else hoverBox.hidden = true;
     }
     return;
   }
