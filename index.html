@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Loop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%2317171A'/%3E%3Ccircle cx='16' cy='16' r='6.5' stroke='%23F4F3EF' stroke-width='2.6' fill='none'/%3E%3C/svg%3E">
+</head>
+<body>
+<div id="viewport" data-tool="select">
+  <div id="world">
+    <div id="frames"></div>
+    <svg id="ink" width="1" height="1"></svg>
+    <div id="cursors"></div>
+  </div>
+  <div id="hover-box" hidden></div>
+  <div id="empty" hidden>
+    <div class="empty-card">
+      <div class="empty-mark"></div>
+      <h1>An empty canvas</h1>
+      <p>Ask your agent to fill it:</p>
+      <code>Use the Loop skill to put this project's main screens on a canvas.</code>
+      <p class="muted">Or press <kbd>N</kbd> to describe a frame and let the agent build it.</p>
+    </div>
+  </div>
+</div>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="7"/><circle cx="16" cy="16" r="6.5"/></svg></span>
+    <span class="wordmark">Loop</span>
+    <span class="sep">/</span>
+    <span id="canvas-name" class="canvas-name"></span>
+  </div>
+  <div class="top-right">
+    <div id="presence" class="presence"></div>
+    <button id="agent-pill" class="pill" title="Agent connection">
+      <span class="agent-dot"></span><span id="agent-label">Agent</span>
+    </button>
+    <button id="share-btn" class="btn-primary">Share</button>
+  </div>
+</header>
+
+<div id="agent-menu" class="menu" hidden>
+  <div class="menu-title">Comments go to</div>
+  <button class="menu-item" data-mode="headless">
+    <span class="radio"></span>
+    <span><b>Claude Code, run by Loop</b><small>Each comment starts a headless run on that frame. Hands-free.</small></span>
+  </button>
+  <button class="menu-item" data-mode="inbox">
+    <span class="radio"></span>
+    <span><b>Your agent session</b><small>Comments queue up; your open agent pulls them with <code>loop inbox --wait</code>.</small></span>
+  </button>
+</div>
+
+<div id="share-menu" class="menu" hidden>
+  <div class="menu-title">Invite people</div>
+  <div id="invite-signin">
+    <p class="menu-copy">Invite people by email. They sign in with Google and can open the canvas anytime, even when your Mac is off. Their comments wait for you before reaching the agent.</p>
+    <button id="cloud-google" class="btn-google"><svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 009 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 013.68 9c0-.6.1-1.18.29-1.72V4.95H.96A9 9 0 000 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 00.96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>Continue with Google</button>
+  </div>
+  <div id="invite-form" hidden>
+    <div class="copy-row"><input id="invite-emails" placeholder="name@gmail.com, another@gmail.com"><button id="invite-go" class="btn-dark">Invite</button></div>
+    <p id="invite-note" class="menu-note"></p>
+    <div id="members" class="members"></div>
+    <label class="field-label">Canvas link (only invited people can open it)</label>
+    <div class="copy-row"><input id="cloud-link" readonly placeholder="Created when you invite someone"><button data-copy="cloud-link">Copy</button></div>
+    <div class="signed-as"><span id="me-avatar" class="av-sm"></span><span id="me-email"></span><button id="cloud-signout" class="link-btn">Sign out</button></div>
+  </div>
+  <details class="lan-share">
+  <summary>Or share on this network</summary>
+  <p class="menu-copy">Anyone with this link can view, play with the frames, and comment while your Mac is on.</p>
+  <label class="field-label">Same network</label>
+  <div class="copy-row"><input id="share-lan" readonly><button data-copy="share-lan">Copy</button></div>
+  <label class="field-label">Public link</label>
+  <div id="share-public-row" class="copy-row" hidden><input id="share-public" readonly><button data-copy="share-public">Copy</button></div>
+  <button id="share-public-btn" class="btn-secondary">Create public link</button>
+  <p id="share-public-note" class="menu-note"></p>
+  <button id="share-rotate" class="link-btn">Reset links (revokes old ones)</button>
+  </details>
+</div>
+
+<nav id="toolbar" aria-label="Tools">
+  <button data-tool="select" title="Select & interact (V)"><svg viewBox="0 0 24 24"><path d="M5 3.5l13 7.2-5.6 1.6-2.6 5.6z"/></svg></button>
+  <button data-tool="hand" title="Pan (H, or hold Space)"><svg viewBox="0 0 24 24"><path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5V4a1.5 1.5 0 013 0v7m0-5.5a1.5 1.5 0 013 0V13c0 4-2.5 7-6.5 7S6 18 4.8 15.5L3.6 13a1.4 1.4 0 012.3-1.5L8 13.5"/></svg></button>
+  <button data-tool="pen" title="Draw (P)"><svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.4L16.6 4.2a1.9 1.9 0 012.7 0l.5.5a1.9 1.9 0 010 2.7L8.4 18.8z"/><path d="M14.5 6.3l3.2 3.2"/></svg></button>
+  <button data-tool="erase" title="Erase marks (E)"><svg viewBox="0 0 24 24"><path d="M8.5 19.5L3.8 14.8a1.8 1.8 0 010-2.5l8.5-8.5a1.8 1.8 0 012.5 0l5.4 5.4a1.8 1.8 0 010 2.5l-8 8z"/><path d="M8.5 19.5H20M7.5 9.5l7 7"/></svg></button>
+  <button data-tool="comment" title="Point & comment (C)"><svg viewBox="0 0 24 24"><path d="M4 18.5V6.5A2.5 2.5 0 016.5 4h11A2.5 2.5 0 0120 6.5v8a2.5 2.5 0 01-2.5 2.5H8.5z"/></svg></button>
+  <span class="tb-sep"></span>
+  <button id="new-frame-btn" class="tb-new" title="New frame (N)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Frame</span></button>
+</nav>
+
+<div id="zoom">
+  <button id="zoom-out" title="Zoom out (−)">−</button>
+  <button id="zoom-level" title="Fit all (Shift+1)">100%</button>
+  <button id="zoom-in" title="Zoom in (+)">+</button>
+</div>
+
+<div id="composer" class="pop" hidden>
+  <div class="composer-target" id="composer-target"></div>
+  <textarea id="composer-input" rows="1" placeholder="Comment, then ↵ to send to the agent"></textarea>
+  <div class="composer-foot">
+    <span id="composer-ink" class="chip" hidden></span>
+    <span class="hint"><kbd>↵</kbd> send · <kbd>⇧↵</kbd> new line · <kbd>esc</kbd></span>
+  </div>
+</div>
+
+<div id="thread" class="pop" hidden></div>
+
+<div id="ink-chip" hidden><button>Comment on marks</button></div>
+
+<div id="new-frame" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><span>New frame</span><button class="icon-btn" data-close>×</button></div>
+    <textarea id="new-frame-input" rows="3" placeholder="Describe it — “a pricing page with three tiers and a monthly/yearly toggle”&#10;…or paste a folder path or http://localhost URL"></textarea>
+    <div class="modal-foot">
+      <div class="size-pick" id="size-pick">
+        <button data-size="1280x800" class="on">Desktop</button>
+        <button data-size="834x1112">Tablet</button>
+        <button data-size="390x844">Mobile</button>
+      </div>
+      <button id="new-frame-go" class="btn-primary">Create <kbd>↵</kbd></button>
+    </div>
+  </div>
+</div>
+
+<div id="name-modal" class="modal" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head"><span>What should we call you?</span></div>
+    <input id="name-input" placeholder="Your name" maxlength="32">
+    <div class="modal-foot"><span class="muted">Shown next to your cursor and comments.</span><button id="name-go" class="btn-primary">Join</button></div>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+<div id="gate"><div class="g-card">
+  <div class="g-logo"><svg viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="7"/><circle cx="16" cy="16" r="6.5"/></svg>Loop</div>
+  <div id="gate-body"><p class="g-note">Loading…</p></div>
+</div></div>
+<style>
+#gate { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: var(--paper);
+  background-image: radial-gradient(var(--grid) 1px, transparent 0); background-size: 24px 24px; }
+.g-card { width: min(400px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-lg); padding: 28px; }
+.g-logo { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 22px; }
+.g-logo svg { width: 22px; height: 22px; } .g-logo rect { fill: var(--ink); } .g-logo circle { fill: none; stroke: var(--paper); stroke-width: 2.6; }
+#gate h1 { font-size: 19px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; }
+#gate p { color: var(--ink-2); margin: 0 0 18px; }
+.g-btn { width: 100%; height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); font-weight: 500; font-size: 14px; }
+.g-btn:hover { background: var(--surface-2); } .g-btn svg { width: 18px; height: 18px; }
+.g-alt { margin-top: 14px; } .g-alt summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.g-row { display: flex; gap: 6px; margin-top: 10px; }
+.g-row input { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); outline: 0; }
+.g-row button { height: 36px; padding: 0 12px; border-radius: 8px; background: var(--ink); color: var(--paper); font-weight: 500; }
+.g-note { color: var(--muted) !important; font-size: 12.5px; margin: 12px 0 0 !important; } .g-note:empty { display: none; }
+.g-link { color: var(--accent); }
+.g-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.g-item { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; color: inherit; text-decoration: none; border: 1px solid var(--line); }
+.g-item:hover { background: var(--surface-2); } .g-item b { display: block; font-weight: 500; } .g-item small { color: var(--muted); }
+.g-av, .acct { width: 30px; height: 30px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); display: grid; place-items: center; overflow: hidden; font-weight: 600; font-size: 12px; flex: none; }
+.g-av img, .acct img { width: 100%; height: 100%; object-fit: cover; }
+.acct { width: 34px; height: 34px; border-radius: 10px; box-shadow: var(--shadow); }
+</style>
+<script src="config.js"></script>
+<script src="cloud.js" type="module"></script>
+</body>
+</html>
