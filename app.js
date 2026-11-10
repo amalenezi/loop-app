@@ -355,7 +355,10 @@ function anchorFor(fid, lx, ly) {
 const CANVAS = '__canvas'; // comments placed on the empty canvas
 function anchorPos(fid, a) {
   if (fid === CANVAS) return { x: a.wx, y: a.wy };
-  if (a.scope === 'frame') return { x: a.x, y: a.y };
+  if (a.scope === 'frame' || a.scope === 'point') {
+    let dx = 0, dy = 0; try { const w = frameDoc(fid).defaultView; dx = w.scrollX - (a.sx || 0); dy = w.scrollY - (a.sy || 0); } catch {}
+    return { x: a.x - (a.scope === 'point' ? dx : 0), y: a.y - (a.scope === 'point' ? dy : 0) };
+  }
   const doc = frameDoc(fid);
   if (doc && a.selector) {
     try {
@@ -457,7 +460,7 @@ function openComposer(fid, lx, ly, scope) {
   const picked = fid === CANVAS ? null : anchorFor(fid, lx, ly);
   const strokes = freshInk(fid);
   draft = { frameId: fid, picked, lx, ly, inkStrokes: strokes.map(s => s.id) };
-  setScope(scope || (fid === CANVAS ? 'canvas' : picked?.selector ? 'element' : 'spot'));
+  setScope(fid === CANVAS ? 'canvas' : 'point');
   const chip = $('#composer-ink');
   chip.hidden = !strokes.length; chip.textContent = `${strokes.length} mark${strokes.length === 1 ? '' : 's'} attached`;
   composerInput.placeholder = isOwner()
@@ -474,26 +477,11 @@ function nearFrames(wx, wy) {
 function setScope(scope) {
   const d = draft; if (!d) return;
   const f = S.frames.find(x => x.id === d.frameId);
-  if (scope === 'element' && !d.picked?.selector) scope = 'spot';
   d.scope = scope;
   if (scope === 'canvas') d.anchor = { scope, wx: d.lx, wy: d.ly, near: nearFrames(d.lx, d.ly) };
-  else if (scope === 'frame') d.anchor = { scope, x: 18, y: 18 };
-  else if (scope === 'spot') d.anchor = { scope, x: d.lx, y: d.ly, sx: d.picked?.sx || 0, sy: d.picked?.sy || 0 };
-  else d.anchor = { ...d.picked, scope };
-  const t = d.anchor;
-  $('#composer-target').innerHTML = scope === 'canvas' ? `<b>Canvas</b><span>${t.near.length ? `near ${esc(t.near.join(', '))}` : 'general note'}</span>`
-    : scope === 'frame' ? `<b>${esc(f.name)}</b><span>whole frame</span>`
-    : scope === 'spot' ? `<b>${esc(f.name)}</b><span>this spot · x ${Math.round(d.lx)}, y ${Math.round(d.ly)}</span>`
-    : `<b>${esc(t.label)}</b><span>${esc(t.text ? `“${t.text}”` : t.selector)}</span>`;
-  const pick = $('#scope-pick');
-  pick.hidden = scope === 'canvas';
-  pick.querySelectorAll('button').forEach(b => {
-    b.classList.toggle('on', b.dataset.scope === scope);
-    b.disabled = b.dataset.scope === 'element' && !d.picked?.selector;
-  });
+  else d.anchor = { ...(d.picked || {}), scope: 'point', x: d.lx, y: d.ly, fx: undefined, fy: undefined }; // pin stays where you clicked
   renderPins(d.frameId); positionPops();
 }
-document.querySelectorAll('#scope-pick button').forEach(b => b.addEventListener('click', () => { setScope(b.dataset.scope); composerInput.focus(); }));
 function closeComposer() {
   const fid = draft?.frameId; draft = null; composer.hidden = true;
   if (fid) renderPins(fid);
@@ -609,7 +597,7 @@ function renderThread() {
       ${agentLine(c)}
     </div>`).join('');
   threadEl.innerHTML = `
-    <div class="thread-head"><span class="t-title">#${n} · ${esc(f?.name || (root.frameId === CANVAS ? 'Canvas' : ''))}${root.anchor?.scope === 'frame' ? ' · whole frame' : ''}</span>
+    <div class="thread-head"><span class="t-title">#${n} · ${esc(f?.name || (root.frameId === CANVAS ? 'Canvas' : ''))}</span>
       <span class="t-actions">
         <button class="icon-btn" data-act="resolve" title="${root.resolved ? 'Reopen' : 'Resolve'}">${root.resolved ? '↺' : '✓'}</button>
         <button class="icon-btn" data-act="delete" title="Delete thread">⌫</button>
@@ -668,8 +656,7 @@ vp.addEventListener('pointerdown', e => {
   if (tool === 'pen') return startStroke(e);
   if (tool === 'erase') { gesture = { type: 'erase' }; eraseAt(e); vp.setPointerCapture(e.pointerId); return; }
   if (tool === 'comment') {
-    if (fid && e.target.closest('.frame-body')) { const { lx, ly } = localFromClient(fid, e.clientX, e.clientY); openComposer(fid, lx, ly, e.altKey ? 'spot' : undefined); }
-    else if (fid && e.target.closest('.frame-label')) openComposer(fid, 18, 18, 'frame');
+    if (fid && e.target.closest('.frame-body')) { const { lx, ly } = localFromClient(fid, e.clientX, e.clientY); openComposer(fid, lx, ly); }
     else if (!composer.hidden || openThreadId) { closeComposer(); closeThread(); }
     else { const w = toWorld(e.clientX, e.clientY); openComposer(CANVAS, w.x, w.y, 'canvas'); }
     return;
@@ -717,12 +704,7 @@ vp.addEventListener('pointermove', e => {
     if (tool === 'comment') {
       const fid = e.target.closest('.frame-body') && e.target.closest('.frame')?.dataset.id;
       const lfid = !fid && e.target.closest('.frame-label') && e.target.closest('.frame')?.dataset.id;
-      if (fid) showHover(fid, e.clientX, e.clientY);
-      else if (lfid) {
-        const r = frameEls.get(lfid).iframe.getBoundingClientRect();
-        Object.assign(hoverBox.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
-        hoverBox.dataset.tag = 'whole frame'; hoverBox.hidden = false;
-      } else hoverBox.hidden = true;
+      hoverBox.hidden = true;
     }
     return;
   }
