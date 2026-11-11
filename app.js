@@ -17,7 +17,8 @@ let viewLoaded = false;
 let tool = 'select', spaceHeld = false;
 let selected = null;           // frame id
 let openThreadId = null;
-let draft = null;              // { frameId, anchor, ink, inkStrokes }
+let draft = null;
+let pendingSelect = null;   // select this frame as soon as it arrives              // { frameId, anchor, ink, inkStrokes }
 let inkChip = null;            // { frameId, lx, ly }
 const myStrokes = new Set();
 const frameEls = new Map();    // id -> { el, iframe, ... }
@@ -137,7 +138,8 @@ function render() {
   renderInk();
   renderAllPins();
   if (openThreadId) renderThread();
-  if (draft && !ids.has(draft.frameId)) closeComposer();
+  if (draft && draft.frameId !== CANVAS && !ids.has(draft.frameId)) closeComposer();
+  renderPanel();
 }
 
 function frameView(f) { return { ...f, ...(drag.get(f.id) || {}) }; }
@@ -147,18 +149,19 @@ function makeFrame(f) {
   el.className = 'frame'; el.dataset.id = f.id;
   el.innerHTML = `
     <div class="frame-label">
-      <span class="spinner"></span><span class="name"></span><span class="kind" hidden></span><span class="count"></span>
+      <span class="spinner"></span><span class="name"></span><span class="dims"></span><span class="kind" hidden></span><span class="count"></span>
       <span class="step"></span><span class="elapsed"></span><span class="updated"></span>
       <button class="stop" title="Stop the agent">Stop</button>
     </div>
-    <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="shield"></div><div class="pins"></div><div class="progress"></div></div>
+    <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="empty-hint"><b>Empty frame</b><span>Press C and click here to tell the agent what goes on this screen</span></div><div class="shield"></div><div class="pins"></div><div class="progress"></div></div>
     <div class="resize"></div>`;
   framesEl.appendChild(el);
-  const fe = { el, iframe: el.querySelector('iframe'), label: el.querySelector('.frame-label'), name: el.querySelector('.name'), kind: el.querySelector('.kind'), count: el.querySelector('.count'), step: el.querySelector('.step'), elapsed: el.querySelector('.elapsed'), updated: el.querySelector('.updated'), pins: el.querySelector('.pins'), restore: null };
+  const fe = { el, iframe: el.querySelector('iframe'), label: el.querySelector('.frame-label'), name: el.querySelector('.name'), dims: el.querySelector('.dims'), kind: el.querySelector('.kind'), count: el.querySelector('.count'), step: el.querySelector('.step'), elapsed: el.querySelector('.elapsed'), updated: el.querySelector('.updated'), pins: el.querySelector('.pins'), restore: null };
   fe.iframe.addEventListener('load', () => {
     try {
       const w = fe.iframe.contentWindow;
       if (fe.restore) { w.scrollTo(fe.restore.sx, fe.restore.sy); fe.restore = null; }
+      fe.el.classList.toggle('empty', !!w.document.querySelector('meta[name="loop-empty"]'));
       w.addEventListener('scroll', () => positionPins(f.id), { passive: true });
       w.addEventListener('resize', () => positionPins(f.id));
       // pass shortcuts through when the frame has focus
@@ -197,6 +200,8 @@ function updateFrame(f0) {
   }
   fe.el.classList.toggle('selected', selected === f.id);
   fe.el.classList.toggle('live', tool === 'select' && selected === f.id && !spaceHeld);
+  fe.dims.textContent = `${Math.round(f.w)} × ${Math.round(f.h)}`;
+  if (pendingSelect === f.id) { pendingSelect = null; queueMicrotask(() => { selectFrame(f.id); revealFrame(f.id); }); }
 }
 
 function elapsed(t) { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }
@@ -649,14 +654,16 @@ composer.addEventListener('pointerdown', e => e.stopPropagation());
 
 // ---------- tools ----------
 function setTool(t) {
+  if (t === 'frame' && !isOwner()) return;
   tool = t; vp.dataset.tool = t;
   document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   hoverBox.hidden = true;
   if (t !== 'pen') hideInkChip();
   if (S) for (const f of S.frames) updateFrame(f);
+  renderPanel();
 }
 document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
-function selectFrame(id) { selected = id; if (S) for (const f of S.frames) updateFrame(f); }
+function selectFrame(id) { selected = id; if (S) for (const f of S.frames) updateFrame(f); renderPanel(); }
 
 // ---------- pointer ----------
 let gesture = null;
@@ -666,6 +673,7 @@ vp.addEventListener('pointerdown', e => {
   if (e.button === 1 || tool === 'hand' || spaceHeld) return startPan(e);
   if (e.button !== 0) return;
   if (tool === 'pen') return startStroke(e);
+  if (tool === 'frame') return startDraw(e);
   if (tool === 'erase') { gesture = { type: 'erase' }; eraseAt(e); vp.setPointerCapture(e.pointerId); return; }
   if (tool === 'comment') {
     if (fid && e.target.closest('.frame-body')) { const { lx, ly } = localFromClient(fid, e.clientX, e.clientY); openComposer(fid, lx, ly); }
@@ -688,6 +696,11 @@ function startPan(e) {
 function startMove(fid, e) {
   const f = S.frames.find(x => x.id === fid);
   gesture = { type: 'move', fid, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, moved: false };
+  vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
+}
+function startDraw(e) {
+  const p = toWorld(e.clientX, e.clientY);
+  gesture = { type: 'draw', x0: p.x, y0: p.y, rect: null };
   vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
 }
 function startResize(fid, e) {
@@ -726,9 +739,20 @@ vp.addEventListener('pointermove', e => {
     g.moved = true;
     drag.set(g.fid, { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z });
     updateFrame(S.frames.find(f => f.id === g.fid)); positionPops();
+  } else if (g.type === 'draw') {
+    const p = toWorld(e.clientX, e.clientY);
+    const r = { x: Math.min(g.x0, p.x), y: Math.min(g.y0, p.y), w: Math.abs(p.x - g.x0), h: Math.abs(p.y - g.y0) };
+    if (e.shiftKey) r.w = r.h = Math.max(r.w, r.h);
+    g.rect = r;
+    const box = $('#draw-box');
+    Object.assign(box.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+    box.querySelector('span').textContent = `${Math.round(r.w)} × ${Math.round(r.h)}`;
+    box.hidden = false;
   } else if (g.type === 'resize') {
-    drag.set(g.fid, { w: Math.max(240, g.w + (e.clientX - g.sx) / view.z), h: Math.max(160, g.h + (e.clientY - g.sy) / view.z) });
+    const d = { w: Math.max(120, g.w + (e.clientX - g.sx) / view.z), h: Math.max(120, g.h + (e.clientY - g.sy) / view.z) };
+    drag.set(g.fid, d);
     updateFrame(S.frames.find(f => f.id === g.fid));
+    if ($('#fp-sw')) { $('#fp-sw').value = Math.round(d.w); $('#fp-sh').value = Math.round(d.h); }
   } else if (g.type === 'stroke') {
     const p = toWorld(e.clientX, e.clientY), n = g.points.length;
     if (Math.hypot(p.x - g.points[n - 2], p.y - g.points[n - 1]) * view.z < 1.5) return;
@@ -738,6 +762,12 @@ vp.addEventListener('pointermove', e => {
 const endGesture = async e => {
   const g = gesture; if (!g) return;
   gesture = null; vp.classList.remove('dragging');
+  if (g.type === 'draw') {
+    $('#draw-box').hidden = true;
+    const r = g.rect;
+    if (r && r.w * view.z > 12 && r.h * view.z > 12) createBlank('Frame', r.w, r.h, r.x, r.y);
+    return;
+  }
   if ((g.type === 'move' && g.moved) || g.type === 'resize') {
     const d = drag.get(g.fid);
     const f = S.frames.find(x => x.id === g.fid);
@@ -793,6 +823,7 @@ addEventListener('keydown', e => {
   else if (k === 'e') setTool('erase');
   else if (k === 'c') setTool('comment');
   else if (k === 'n' && isOwner()) openNewFrame();
+  else if (k === 'f' && isOwner()) setTool(tool === 'frame' ? 'select' : 'frame');
   else if (e.key === '!' || (e.shiftKey && e.code === 'Digit1')) fitAll();
   else if (e.key === '=' || e.key === '+') zoomAt(innerWidth / 2, innerHeight / 2, 1.25);
   else if (e.key === '-') zoomAt(innerWidth / 2, innerHeight / 2, 0.8);
@@ -867,7 +898,6 @@ function openNewFrame() {
   const t = $('#new-frame-input'); t.value = ''; setTimeout(() => t.focus(), 0);
 }
 function closeNewFrame() { $('#new-frame').hidden = true; }
-$('#new-frame-btn').addEventListener('click', openNewFrame);
 $('#new-frame [data-close]').addEventListener('click', closeNewFrame);
 $('#new-frame').addEventListener('pointerdown', e => { if (e.target.id === 'new-frame') closeNewFrame(); });
 document.querySelectorAll('#size-pick button').forEach(b => b.addEventListener('click', () => {
@@ -1002,6 +1032,104 @@ async function sendInvites() {
   } catch (e) { note.textContent = e.message; }
   btn.disabled = false;
 }
+
+// ---------- frame tool: presets, freeform, size inspector ----------
+const QUICK = [['Mobile', 393, 852], ['Tablet', 834, 1194], ['Desktop', 1440, 1024]];
+const PRESET_GROUPS = [
+  ['Phone', [['iPhone 16', 393, 852], ['iPhone 16 Pro Max', 440, 956], ['iPhone SE', 375, 667], ['Android (compact)', 412, 917], ['Android (large)', 448, 998]]],
+  ['Tablet', [['iPad mini', 744, 1133], ['iPad Pro 11"', 834, 1194], ['iPad Pro 13"', 1032, 1376], ['Android tablet', 800, 1280]]],
+  ['Desktop', [['Desktop', 1440, 1024], ['MacBook Air', 1280, 832], ['MacBook Pro 14"', 1512, 982], ['Desktop HD', 1920, 1080], ['Wide', 1728, 1117]]],
+];
+const DEVICE_ICON = {
+  Mobile: '<svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.5h2"/></svg>',
+  Tablet: '<svg viewBox="0 0 24 24"><rect x="4.5" y="2.5" width="15" height="19" rx="2.2"/><path d="M11 18.5h2"/></svg>',
+  Desktop: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="1.8"/><path d="M9 20h6M12 16.5V20"/></svg>',
+};
+function uniqueName(base) {
+  const names = new Set(S.frames.map(f => f.name));
+  if (!names.has(base)) return base;
+  for (let i = 2; ; i++) if (!names.has(`${base} ${i}`)) return `${base} ${i}`;
+}
+// a spot where a w×h frame fits without overlapping, near the middle of the screen
+function freeSpot(w, h) {
+  const c = toWorld(innerWidth / 2, innerHeight / 2);
+  const hit = (x, y) => S.frames.some(f => x < f.x + f.w + 80 && x + w + 80 > f.x && y < f.y + f.h + 80 && y + h + 80 > f.y);
+  const x0 = Math.round(c.x - w / 2), y0 = Math.round(c.y - h / 2);
+  for (let ring = 0; ring < 30; ring++) for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+    const x = x0 + dx * ring * (w * 0.5 + 80), y = y0 + dy * ring * (h * 0.5 + 80);
+    if (!hit(x, y)) return { x, y };
+  }
+  return { x: x0, y: y0 };
+}
+function revealFrame(id) {
+  const f = S.frames.find(x => x.id === id); if (!f) return;
+  const a = { x: view.x + f.x * view.z, y: view.y + f.y * view.z }, b = { x: a.x + f.w * view.z, y: a.y + f.h * view.z };
+  if (a.x < 0 || a.y < 60 || b.x > innerWidth || b.y > innerHeight - 80) fitAll(true, [id]);
+}
+async function createBlank(base, w, h, x, y) {
+  const pos = x != null ? { x: Math.round(x), y: Math.round(y) } : freeSpot(w, h);
+  try {
+    const f = await api('POST', '/__loop/api/frames', { new: true, blank: true, name: uniqueName(base), w: Math.round(w), h: Math.round(h), ...pos });
+    pendingSelect = f.id;
+    setTool('select');
+    if (S.frames.find(x => x.id === f.id)) { pendingSelect = null; selectFrame(f.id); revealFrame(f.id); }
+  } catch (e) { toast(e.message); }
+}
+function renderPanel() {
+  const panel = $('#frame-panel');
+  if (!S || !isOwner() || ADAPTER) { panel.hidden = true; return; }
+  if (panel.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return; // don't clobber typing
+  const sel = tool === 'select' && selected && S.frames.find(f => f.id === selected);
+  if (tool !== 'frame' && !sel) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const body = $('#fp-body');
+  if (tool === 'frame') {
+    $('#fp-title').textContent = 'New frame';
+    body.innerHTML = `
+      <div class="fp-quick">${QUICK.map(([n, w, h]) => `<button class="fp-q" data-w="${w}" data-h="${h}" data-name="${n}">${DEVICE_ICON[n]}<b>${n}</b><small>${w} × ${h}</small></button>`).join('')}</div>
+      <p class="fp-hint">Or drag on the canvas to draw any size. Hold ⇧ for a square.</p>
+      ${PRESET_GROUPS.map(([g, list]) => `<details class="fp-group"><summary>${g}</summary>${list.map(([n, w, h]) => `<button class="fp-row" data-w="${w}" data-h="${h}" data-name="${n}"><span>${esc(n)}</span><small>${w} × ${h}</small></button>`).join('')}</details>`).join('')}
+      <div class="fp-custom"><label>W<input id="fp-w" inputmode="numeric" value="1200"></label><label>H<input id="fp-h" inputmode="numeric" value="800"></label><button id="fp-make" class="btn-dark">Add</button></div>
+      <button id="fp-describe" class="link-btn">Describe a frame and let the agent build it (N)</button>`;
+  } else {
+    $('#fp-title').textContent = sel.name;
+    const kind = sel.kind === 'route' ? `App route ${sel.src}` : sel.kind === 'url' ? 'Live URL' : 'Static frame';
+    body.innerHTML = `
+      <div class="fp-size"><label>W<input id="fp-sw" inputmode="numeric" value="${Math.round(sel.w)}"></label><label>H<input id="fp-sh" inputmode="numeric" value="${Math.round(sel.h)}"></label></div>
+      <div class="fp-chips">${QUICK.map(([n, w, h]) => `<button class="fp-chip${Math.round(sel.w) === w && Math.round(sel.h) === h ? ' on' : ''}" data-w="${w}" data-h="${h}">${n}</button>`).join('')}</div>
+      <details class="fp-group"><summary>All sizes</summary>${PRESET_GROUPS.flatMap(([, l]) => l).map(([n, w, h]) => `<button class="fp-row resize" data-w="${w}" data-h="${h}"><span>${esc(n)}</span><small>${w} × ${h}</small></button>`).join('')}</details>
+      <p class="fp-hint">${esc(kind)} · drag the corner handle to resize freely.</p>`;
+  }
+}
+async function resizeSelected(w, h) {
+  const f = S.frames.find(x => x.id === selected); if (!f || !(w > 0 && h > 0)) return;
+  Object.assign(f, { w: Math.round(w), h: Math.round(h) }); updateFrame(f);
+  try { await api('PATCH', `/__loop/api/frames/${f.id}`, { w: f.w, h: f.h }); } catch (e) { toast(e.message); }
+  renderPanel(); setTimeout(() => positionPins(f.id), 60);
+}
+$('#frame-panel').addEventListener('pointerdown', e => e.stopPropagation());
+$('#frame-panel').addEventListener('wheel', e => e.stopPropagation());
+$('#frame-panel').addEventListener('click', e => {
+  if (e.target.closest('#fp-close')) { if (tool === 'frame') setTool('select'); else selectFrame(null); return; }
+  if (e.target.closest('#fp-describe')) { setTool('select'); openNewFrame(); return; }
+  if (e.target.closest('#fp-make')) { const w = +$('#fp-w').value, h = +$('#fp-h').value; if (w > 0 && h > 0) createBlank('Frame', w, h); return; }
+  const b = e.target.closest('[data-w]'); if (!b) return;
+  if (tool === 'frame') createBlank(b.dataset.name, +b.dataset.w, +b.dataset.h);
+  else resizeSelected(+b.dataset.w, +b.dataset.h);
+});
+$('#frame-panel').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Escape') { e.target.blur(); return; }
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'fp-sw' || e.target.id === 'fp-sh') { const w = +$('#fp-sw').value, h = +$('#fp-sh').value; e.target.blur(); resizeSelected(w, h); }
+  if (e.target.id === 'fp-w' || e.target.id === 'fp-h') $('#fp-make').click();
+});
+$('#frame-panel').addEventListener('focusout', e => {
+  if ((e.target.id === 'fp-sw' || e.target.id === 'fp-sh') && !$('#frame-panel').contains(e.relatedTarget)) {
+    const f = S.frames.find(x => x.id === selected), w = +$('#fp-sw')?.value, h = +$('#fp-sh')?.value;
+    if (f && (w !== Math.round(f.w) || h !== Math.round(f.h))) resizeSelected(w, h);
+  }
+});
 
 addEventListener('resize', () => positionPops());
 finishHostSignIn();
