@@ -171,7 +171,7 @@ function makeFrame(f) {
       <button class="stop" title="Stop the agent">Stop</button>
     </div>
     <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="empty-hint"><b>✦ Describe this screen</b><span>Click to tell the agent what goes here</span></div><div class="shield"></div><div class="areas"></div><div class="progress"></div></div><div class="pins"></div>
-    <div class="resize"></div>`;
+    ${['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(d => `<div class="resize rz-${d}" data-dir="${d}"></div>`).join('')}`;
   framesEl.appendChild(el);
   const fe = { el, iframe: el.querySelector('iframe'), label: el.querySelector('.frame-label'), name: el.querySelector('.name'), dims: el.querySelector('.dims'), kind: el.querySelector('.kind'), count: el.querySelector('.count'), step: el.querySelector('.step'), elapsed: el.querySelector('.elapsed'), updated: el.querySelector('.updated'), pins: el.querySelector('.pins'), restore: null };
   fe.iframe.addEventListener('load', () => {
@@ -392,7 +392,7 @@ function anchorFor(fid, lx, ly) {
 const CANVAS = '__canvas'; // comments placed on the empty canvas
 function anchorPos(fid, a) {
   if (fid === CANVAS) return { x: a.wx, y: a.wy };
-  if (a.scope === 'frame' || a.scope === 'point' || a.scope === 'area') {
+  if (a.scope === 'frame' || a.scope === 'point' || a.scope === 'area' || a.scope === 'elements') {
     let dx = 0, dy = 0; try { const w = frameDoc(fid).defaultView; dx = w.scrollX - (a.sx || 0); dy = w.scrollY - (a.sy || 0); } catch {}
     return { x: a.x - (a.scope !== 'frame' ? dx : 0), y: a.y - (a.scope !== 'frame' ? dy : 0) };
   }
@@ -467,6 +467,7 @@ function renderPins(fid) {
 }
 function positionPins(fid) {
   const box = pinsBox(fid); if (!box || !S) return;
+  if (deepSel?.frameId === fid) renderDeepBoxes();
   areasBox(fid)?.querySelectorAll('.area[data-key]').forEach(el => {
     const a = el.dataset.key === '__draft' ? draft?.anchor : S.comments.find(c => c.id === el.dataset.key)?.anchor;
     if (!a) return;
@@ -619,6 +620,7 @@ $('#prompt-ideas').addEventListener('click', e => {
 });
 function closeComposer() {
   composer.classList.remove('prompt', 'soft'); softFrom = null;
+  if (draft?.deep) clearDeep();
   const fid = draft?.frameId; draft = null; composer.hidden = true;
   if (fid) renderPins(fid);
 }
@@ -831,6 +833,7 @@ composer.addEventListener('pointerdown', e => e.stopPropagation());
 // ---------- tools ----------
 function setTool(t) {
   if (t === 'frame' && !isOwner()) return;
+  if (t !== 'deep' && deepSel) clearDeep();
   tool = t; vp.dataset.tool = t;
   document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   hoverBox.hidden = true;
@@ -851,6 +854,11 @@ vp.addEventListener('pointerdown', e => {
   if (tool === 'pen') return startStroke(e);
   if (tool === 'frame') return startDraw(e);
   if (tool === 'erase') { gesture = { type: 'erase' }; eraseAt(e); vp.setPointerCapture(e.pointerId); return; }
+  if (tool === 'deep') {
+    if (fid && e.target.closest('.frame-body')) { deepPick(fid, e); return; }
+    clearDeep(); closeComposer(); closeThread();
+    return;
+  }
   if (tool === 'comment') {
     const onFrame = fid && e.target.closest('.frame-body');
     if (!onFrame && (!composer.hidden || openThreadId)) { closeComposer(); closeThread(); return; }
@@ -899,7 +907,8 @@ function startDraw(e) {
 }
 function startResize(fid, e) {
   const f = S.frames.find(x => x.id === fid);
-  gesture = { type: 'resize', fid, sx: e.clientX, sy: e.clientY, w: f.w, h: f.h };
+  const dir = e.target.closest('.resize')?.dataset.dir || 'se';
+  gesture = { type: 'resize', fid, dir, sx: e.clientX, sy: e.clientY, x0: f.x, y0: f.y, w: f.w, h: f.h };
   vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
 }
 function startStroke(e) {
@@ -939,10 +948,10 @@ function eraseAt(e) {
 vp.addEventListener('pointermove', e => {
   sendPresence(e.clientX, e.clientY);
   if (!gesture) {
-    if (tool === 'comment') {
+    if (tool === 'comment') hoverBox.hidden = true;
+    if (tool === 'deep') {
       const fid = e.target.closest('.frame-body') && e.target.closest('.frame')?.dataset.id;
-      const lfid = !fid && e.target.closest('.frame-label') && e.target.closest('.frame')?.dataset.id;
-      hoverBox.hidden = true;
+      if (fid && !e.target.closest('.pin')) showHover(fid, e.clientX, e.clientY); else hoverBox.hidden = true;
     }
     return;
   }
@@ -1010,8 +1019,24 @@ vp.addEventListener('pointermove', e => {
     box.querySelector('span').textContent = `${Math.round(r.w)} × ${Math.round(r.h)}`;
     box.hidden = false;
   } else if (g.type === 'resize') {
-    const d = { w: Math.max(120, g.w + (e.clientX - g.sx) / view.z), h: Math.max(120, g.h + (e.clientY - g.sy) / view.z) };
-    if (!e.metaKey && !e.ctrlKey) { const f = S.frames.find(x => x.id === g.fid); const sn = snapResize({ x: f.x, y: f.y, ...d }, g.fid); d.w += sn.dw; d.h += sn.dh; showGuides(sn.guides); } else showGuides([]);
+    // any edge or corner: e/s grow right/down, w/n move that edge (x/y change too)
+    const dx = (e.clientX - g.sx) / view.z, dy = (e.clientY - g.sy) / view.z, MIN = 120;
+    let x = g.x0, y = g.y0, w = g.w, h = g.h;
+    if (g.dir.includes('e')) w = g.w + dx;
+    if (g.dir.includes('s')) h = g.h + dy;
+    if (g.dir.includes('w')) { w = g.w - dx; x = g.x0 + dx; }
+    if (g.dir.includes('n')) { h = g.h - dy; y = g.y0 + dy; }
+    if (e.shiftKey && g.dir.length === 2) { // keep proportions from a corner
+      const k = Math.max(w / g.w, h / g.h);
+      const nw = g.w * k, nh = g.h * k;
+      if (g.dir.includes('w')) x = g.x0 + g.w - nw;
+      if (g.dir.includes('n')) y = g.y0 + g.h - nh;
+      w = nw; h = nh;
+    }
+    if (w < MIN) { if (g.dir.includes('w')) x = g.x0 + g.w - MIN; w = MIN; }
+    if (h < MIN) { if (g.dir.includes('n')) y = g.y0 + g.h - MIN; h = MIN; }
+    const d = { x, y, w, h };
+    if (!e.metaKey && !e.ctrlKey && !e.shiftKey) { const sn = snapResize(d, g.fid, g.dir); Object.assign(d, sn.rect); showGuides(sn.guides); } else showGuides([]);
     drag.set(g.fid, d);
     updateFrame(S.frames.find(f => f.id === g.fid));
     if ($('#fp-sw')) { $('#fp-sw').value = Math.round(d.w); $('#fp-sh').value = Math.round(d.h); }
@@ -1064,7 +1089,7 @@ const endGesture = async e => {
   if ((g.type === 'move' && g.moved) || g.type === 'resize') {
     const d = drag.get(g.fid);
     const f = S.frames.find(x => x.id === g.fid);
-    const before = g.type === 'move' ? { x: g.fx, y: g.fy } : { w: g.w, h: g.h };
+    const before = g.type === 'move' ? { x: g.fx, y: g.fy } : { x: g.x0, y: g.y0, w: g.w, h: g.h };
     if (d && f) Object.assign(f, d);
     drag.delete(g.fid);
     if (d) {
@@ -1132,11 +1157,13 @@ addEventListener('keydown', e => {
   else if (k === 'p') setTool('pen');
   else if (k === 'e') setTool('erase');
   else if (k === 'c') setTool('comment');
+  else if (k === 'd') setTool('deep');
   else if (k === 'n' && isOwner()) openNewFrame();
   else if (k === 'f' && isOwner()) setTool(tool === 'frame' ? 'select' : 'frame');
   else if (e.key === '!' || (e.shiftKey && e.code === 'Digit1')) fitAll();
   else if (e.key === '=' || e.key === '+') zoomAt(innerWidth / 2, innerHeight / 2, 1.25);
   else if (e.key === '-') zoomAt(innerWidth / 2, innerHeight / 2, 0.8);
+  else if (e.key === 'Escape' && deepSel) { clearDeep(); closeComposer(); }
   else if (e.key === 'Escape') { if (!composer.hidden) closeComposer(); else if (openThreadId) closeThread(); else if (!$('#agent-menu').hidden || !$('#share-menu').hidden) closeMenus(); else { selectFrame(null); setTool('select'); } }
   else if ((e.key === 'Backspace' || e.key === 'Delete') && multi.size && isOwner()) removeFrames([...multi]);
   else if (e.altKey && isOwner() && multi.size >= 2 && ALIGN_KEYS[e.code]) { e.preventDefault(); alignSelection(ALIGN_KEYS[e.code]); }
@@ -1483,6 +1510,47 @@ async function removeFrame(id) {
   toast(`Deleted “${snap.frames[0].name}” — ⌘Z to undo`, 2600);
 }
 
+// ---------- deep select: pick exact elements inside a frame, then comment ----------
+let deepSel = null; // { frameId, els: [Element] }
+function deepPick(fid, e) {
+  const { lx, ly } = localFromClient(fid, e.clientX, e.clientY);
+  const el = elementAt(fid, lx, ly), doc = frameDoc(fid);
+  if (!el || el === doc?.documentElement) return;
+  if (e.shiftKey && deepSel?.frameId === fid) {
+    const i = deepSel.els.indexOf(el);
+    i >= 0 ? deepSel.els.splice(i, 1) : deepSel.els.push(el);
+    if (!deepSel.els.length) { clearDeep(); closeComposer(); return; }
+  } else deepSel = { frameId: fid, els: [el] };
+  const keep = !composer.hidden && draft?.deep ? composerInput.value : '';
+  // the comment box sits by the last element picked
+  openComposer(fid, lx, ly);
+  const els = deepSel.els;
+  draft.deep = true;
+  draft.anchor = { ...draft.anchor, scope: 'elements', elements: els.map(describeForAgent) };
+  composerInput.value = keep; autosize(composerInput);
+  composerInput.placeholder = els.length > 1 ? 'What should change about these?' : 'What should change about this?';
+  const chip = $('#composer-area'); chip.hidden = false;
+  chip.textContent = `${els.length} element${els.length === 1 ? '' : 's'}${els.length === 1 ? ` · ${describeEl(els[0])}` : ''}`;
+  renderDeepBoxes();
+}
+function describeForAgent(el) {
+  const html = el.outerHTML;
+  return { selector: selectorFor(el), tag: el.tagName.toLowerCase(), label: describeEl(el), text: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').replace(/\s+/g, ' ').trim().slice(0, 120), html: html.length > 900 ? html.slice(0, 900) + '…' : html };
+}
+function renderDeepBoxes() {
+  document.querySelectorAll('.deep-box').forEach(n => n.remove());
+  if (!deepSel) return;
+  const box = areasBox(deepSel.frameId); if (!box) return;
+  for (const el of deepSel.els) {
+    const r = el.getBoundingClientRect();
+    const d = document.createElement('div'); d.className = 'deep-box';
+    Object.assign(d.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+    d.dataset.tag = describeEl(el);
+    box.appendChild(d);
+  }
+}
+function clearDeep() { deepSel = null; document.querySelectorAll('.deep-box').forEach(n => n.remove()); }
+
 // ---------- multi-select + alignment ----------
 function setSelection(ids) {
   ids = ids.filter(id => S.frames.find(f => f.id === id));
@@ -1649,11 +1717,16 @@ function snapMove(r, exclude) {
   const moved = { ...r, x: r.x + (sx?.d || 0), y: r.y + (sy?.d || 0) };
   return { dx: sx?.d || 0, dy: sy?.d || 0, guides: guideLines(moved, fr, sx, sy) };
 }
-function snapResize(r, exclude) {
-  const fr = others(exclude), th = SNAP_PX / view.z;
-  const sx = bestSnap([r.x + r.w], fr.flatMap(xs), th), sy = bestSnap([r.y + r.h], fr.flatMap(ys), th);
-  const sized = { ...r, w: r.w + (sx?.d || 0), h: r.h + (sy?.d || 0) };
-  return { dw: sx?.d || 0, dh: sy?.d || 0, guides: guideLines(sized, fr, sx, sy) };
+// snap only the edges being dragged
+function snapResize(r, exclude, dir = 'se') {
+  const fr = others(exclude), th = SNAP_PX / view.z, tx = fr.flatMap(xs), ty = fr.flatMap(ys);
+  const out = { ...r };
+  let sx = null, sy = null;
+  if (dir.includes('e')) { sx = bestSnap([r.x + r.w], tx, th); if (sx) out.w = r.w + sx.d; }
+  else if (dir.includes('w')) { sx = bestSnap([r.x], tx, th); if (sx) { out.x = r.x + sx.d; out.w = r.w - sx.d; } }
+  if (dir.includes('s')) { sy = bestSnap([r.y + r.h], ty, th); if (sy) out.h = r.h + sy.d; }
+  else if (dir.includes('n')) { sy = bestSnap([r.y], ty, th); if (sy) { out.y = r.y + sy.d; out.h = r.h - sy.d; } }
+  return { rect: out, guides: guideLines(out, fr, sx, sy) };
 }
 function showGuides(lines) {
   const g = $('#guides');
@@ -1677,7 +1750,7 @@ addEventListener('blur', () => vp.classList.remove('alt'));
 
 // ---------- keyboard shortcuts sheet ----------
 const SHORTCUTS = [
-  ['Tools', [['V', 'Select & interact'], ['H  /  hold Space', 'Pan'], ['F', 'Frame (presets, or drag to draw)'], ['C', 'Comment (click = pin, drag = area)'], ['P', 'Draw'], ['E', 'Erase marks'], ['N', 'Describe a frame for the agent']]],
+  ['Tools', [['V', 'Select & interact'], ['H  /  hold Space', 'Pan'], ['F', 'Frame (presets, or drag to draw)'], ['C', 'Comment (click = pin, drag = area)'], ['D', 'Deep select: pick exact elements (⇧ for more)'], ['P', 'Draw'], ['E', 'Erase marks'], ['N', 'Describe a frame for the agent']]],
   ['Edit', [['⌘Z', 'Undo'], ['⇧⌘Z  /  Ctrl Y', 'Redo'], ['⌥ drag title', 'Duplicate frame'], ['⌘C  /  ⌘V', 'Copy / paste frame'], ['⌘D', 'Duplicate in place'], ['⇧ click  /  drag box', 'Select several frames'], ['⌘A', 'Select all frames'], ['⌥A ⌥H ⌥D', 'Align left / centre / right'], ['⌥W ⌥V ⌥S', 'Align top / middle / bottom'], ['Delete', 'Delete selected frame'], ['Double-click title', 'Rename frame'], ['Esc', 'Close / deselect']]],
   ['View', [['Pinch  /  ⌘ scroll', 'Zoom'], ['Scroll', 'Pan'], ['⇧1', 'Fit everything'], ['⌘0', 'Zoom to 100%'], ['+  /  −', 'Zoom in / out']]],
   ['Comments', [['↵', 'Send to the agent'], ['⇧↵', 'New line'], ['?', 'This list']]],
