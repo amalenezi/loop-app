@@ -98,6 +98,7 @@ function mount(canvas, user) {
     id: r.id, frameId: r.frame_id, parentId: r.parent_id, text: r.text, anchor: r.anchor, ink: r.ink?.elements || [],
     author: { name: r.author_name || 'Someone', color: r.author_color || '#888', guest: r.author_id !== canvas.owner_id },
     status: r.status, reply: r.reply, resolved: r.resolved, createdAt: Date.parse(r.created_at), mine: r.author_id === user.id,
+    model: r.model, startedAt: r.started_at && Date.parse(r.started_at), finishedAt: r.finished_at && Date.parse(r.finished_at),
   });
   function buildState() {
     const st = canvas.state || {};
@@ -176,7 +177,7 @@ function mount(canvas, user) {
     },
   };
   gate.hidden = true;
-  import('./app.js?v=mwbca21g');
+  import('./app.js?v=mwbcuh0w');
 }
 
 function accountChip(prof) {
