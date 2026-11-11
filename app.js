@@ -19,6 +19,7 @@ let selected = null;           // frame id
 let openThreadId = null;
 let draft = null;
 let pendingSelect = null;   // select this frame as soon as it arrives
+const multi = new Set();    // 2+ selected frames (shift-click or marquee); `selected` stays the single selection
 let pendingPrompt = null;   // …and open the "what should this screen be?" box (new blank frames only)              // { frameId, anchor, ink, inkStrokes }
 let inkChip = null;            // { frameId, lx, ly }
 const myStrokes = new Set();
@@ -154,7 +155,8 @@ function render() {
   renderAllPins();
   if (openThreadId) renderThread();
   if (draft && draft.frameId !== CANVAS && !ids.has(draft.frameId)) closeComposer();
-  renderPanel();
+  for (const id of [...multi]) if (!ids.has(id)) multi.delete(id);
+  renderPanel(); renderAlignBar();
 }
 
 function frameView(f) { return { ...f, ...(drag.get(f.id) || {}) }; }
@@ -224,7 +226,7 @@ function updateFrame(f0) {
     fe.step.textContent = live.step || (c?.kind === 'create' ? 'Building the frame…' : 'Working…');
     fe.elapsed.textContent = elapsed(live.startedAt);
   }
-  fe.el.classList.toggle('selected', selected === f.id);
+  fe.el.classList.toggle('selected', selected === f.id || multi.has(f.id));
   fe.el.classList.toggle('live', tool === 'select' && selected === f.id && !spaceHeld);
   fe.dims.textContent = `${Math.round(f.w)} × ${Math.round(f.h)}`;
   if (pendingSelect === f.id) { const ask = pendingPrompt === f.id; pendingSelect = pendingPrompt = null; queueMicrotask(() => { selectFrame(f.id); revealFrame(f.id); if (ask) setTimeout(() => openPrompt(f.id), 340); }); }
@@ -516,6 +518,7 @@ function positionPops() {
     const c = S.comments.find(x => x.id === openThreadId);
     if (c?.anchor) { const p = anchorPos(c.frameId, c.anchor); const s = screenOf(c.frameId, p.x, p.y); placePop(threadEl, s.x, s.y); }
   }
+  positionAlignBar();
   if (inkChip) { const s = screenOf(inkChip.frameId, inkChip.lx, inkChip.ly); const ch = $('#ink-chip'); ch.style.left = `${s.x + 10}px`; ch.style.top = `${s.y + 10}px`; }
 }
 
@@ -836,7 +839,7 @@ function setTool(t) {
   renderPanel();
 }
 document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
-function selectFrame(id) { selected = id; if (S) for (const f of S.frames) updateFrame(f); renderPanel(); }
+function selectFrame(id) { selected = id; multi.clear(); if (S) for (const f of S.frames) updateFrame(f); renderPanel(); renderAlignBar(); }
 
 // ---------- pointer ----------
 let gesture = null;
@@ -859,11 +862,27 @@ vp.addEventListener('pointerdown', e => {
   // select
   closeComposer();
   if (e.target.closest('.resize') && isOwner()) return startResize(fid, e);
-  if (e.target.closest('.frame-label')) { selectFrame(fid); closeThread(); return isOwner() ? startMove(fid, e) : undefined; }
-  if (fid) { selectFrame(fid); closeThread(); if (frameEls.get(fid)?.el.classList.contains('empty')) openPrompt(fid); return; }
-  selectFrame(null); closeThread();
-  startPan(e);
+  if (fid && e.shiftKey && isOwner()) { toggleInSelection(fid); closeThread(); return; }
+  if (e.target.closest('.frame-label')) {
+    closeThread();
+    if (multi.has(fid)) return isOwner() ? startGroupMove(fid, e) : undefined;
+    selectFrame(fid); return isOwner() ? startMove(fid, e) : undefined;
+  }
+  // on a frame (not its title): a click selects it, a drag draws a selection box — same as on empty canvas
+  closeThread();
+  if (!fid && !e.shiftKey) selectFrame(null);
+  return startMarquee(e, fid);
 });
+function startMarquee(e, clickFid) {
+  const p = toWorld(e.clientX, e.clientY);
+  gesture = { type: 'marquee', x0: p.x, y0: p.y, clickFid, base: e.shiftKey ? new Set([...multi, ...(selected ? [selected] : [])]) : new Set() };
+  vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
+}
+function startGroupMove(fid, e) {
+  const ids = [...multi];
+  gesture = { type: 'gmove', ids, sx: e.clientX, sy: e.clientY, from: Object.fromEntries(ids.map(id => { const f = S.frames.find(x => x.id === id); return [id, { x: f.x, y: f.y }]; })), moved: false };
+  vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
+}
 function startPan(e) {
   gesture = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
   vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
@@ -934,6 +953,7 @@ vp.addEventListener('pointermove', e => {
     g.moved = true;
     const f = S.frames.find(x => x.id === g.fid);
     g.to = { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z };
+    if (!e.metaKey && !e.ctrlKey) { const sn = snapMove({ ...g.to, w: f.w, h: f.h }, null); g.to.x += sn.dx; g.to.y += sn.dy; showGuides(sn.guides); } else showGuides([]);
     const ghost = $('#dup-ghost');
     Object.assign(ghost.style, { left: `${g.to.x}px`, top: `${g.to.y}px`, width: `${f.w}px`, height: `${f.h}px` });
     ghost.querySelector('span').textContent = `${f.name} copy`;
@@ -941,8 +961,31 @@ vp.addEventListener('pointermove', e => {
   }
   else if (g.type === 'move') {
     g.moved = true;
-    drag.set(g.fid, { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z });
-    updateFrame(S.frames.find(f => f.id === g.fid)); positionPops();
+    const f = S.frames.find(x => x.id === g.fid);
+    const to = { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z };
+    if (!e.metaKey && !e.ctrlKey) { const sn = snapMove({ ...to, w: f.w, h: f.h }, g.fid); to.x += sn.dx; to.y += sn.dy; showGuides(sn.guides); } else showGuides([]);
+    drag.set(g.fid, to);
+    updateFrame(f); positionPops();
+  } else if (g.type === 'marquee') {
+    const p = toWorld(e.clientX, e.clientY);
+    const r = { x: Math.min(g.x0, p.x), y: Math.min(g.y0, p.y), w: Math.abs(p.x - g.x0), h: Math.abs(p.y - g.y0) };
+    if (!g.moved && r.w * view.z < 4 && r.h * view.z < 4) return;
+    if (!g.moved && g.clickFid && !e.shiftKey) selectFrame(null);
+    g.moved = true;
+    const box = $('#marquee'); box.hidden = false;
+    Object.assign(box.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+    const hit = S.frames.filter(f => f.x < r.x + r.w && f.x + f.w > r.x && f.y < r.y + r.h && f.y + f.h > r.y).map(f => f.id);
+    setSelection([...new Set([...g.base, ...hit])]);
+  } else if (g.type === 'gmove') {
+    g.moved = true;
+    let dx = (e.clientX - g.sx) / view.z, dy = (e.clientY - g.sy) / view.z;
+    const boxes = g.ids.map(id => { const f = S.frames.find(x => x.id === id); return { x: g.from[id].x + dx, y: g.from[id].y + dy, w: f.w, h: f.h }; });
+    if (!e.metaKey && !e.ctrlKey) {
+      const bb = bbox(boxes);
+      const sn = snapMove(bb, new Set(g.ids)); dx += sn.dx; dy += sn.dy; showGuides(sn.guides);
+    } else showGuides([]);
+    for (const id of g.ids) { drag.set(id, { x: g.from[id].x + dx, y: g.from[id].y + dy }); updateFrame(S.frames.find(f => f.id === id)); }
+    positionAlignBar();
   } else if (g.type === 'cpick') {
     if (!g.area && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) > 6) { g.area = true; closeComposer(); closeThread(); vp.classList.add('dragging'); }
     if (!g.area) return;
@@ -968,6 +1011,7 @@ vp.addEventListener('pointermove', e => {
     box.hidden = false;
   } else if (g.type === 'resize') {
     const d = { w: Math.max(120, g.w + (e.clientX - g.sx) / view.z), h: Math.max(120, g.h + (e.clientY - g.sy) / view.z) };
+    if (!e.metaKey && !e.ctrlKey) { const f = S.frames.find(x => x.id === g.fid); const sn = snapResize({ x: f.x, y: f.y, ...d }, g.fid); d.w += sn.dw; d.h += sn.dh; showGuides(sn.guides); } else showGuides([]);
     drag.set(g.fid, d);
     updateFrame(S.frames.find(f => f.id === g.fid));
     if ($('#fp-sw')) { $('#fp-sw').value = Math.round(d.w); $('#fp-sh').value = Math.round(d.h); }
@@ -979,7 +1023,23 @@ vp.addEventListener('pointermove', e => {
 });
 const endGesture = async e => {
   const g = gesture; if (!g) return;
-  gesture = null; vp.classList.remove('dragging');
+  gesture = null; vp.classList.remove('dragging'); showGuides([]);
+  if (g.type === 'marquee') {
+    $('#marquee').hidden = true;
+    if (!g.moved && g.clickFid) { // it was a click on a frame
+      selectFrame(g.clickFid); // a plain click selects just this frame (even inside a multi-selection)
+      if (frameEls.get(g.clickFid)?.el.classList.contains('empty')) openPrompt(g.clickFid);
+    }
+    return;
+  }
+  if (g.type === 'gmove') {
+    if (!g.moved) return;
+    const before = g.from, after = {};
+    for (const id of g.ids) { const d = drag.get(id); drag.delete(id); const f = S.frames.find(x => x.id === id); if (d && f) { Object.assign(f, d); after[id] = { x: d.x, y: d.y }; } }
+    patchMany(after);
+    record(`Move ${g.ids.length} frames`, () => patchMany(before), () => patchMany(after));
+    return;
+  }
   if (g.type === 'cpick') {
     document.querySelectorAll('.area.picking').forEach(n => n.remove());
     if (g.area && g.rect && g.rect.w * view.z > 8 && g.rect.h * view.z > 8) return openComposer(g.fid, g.rect.x, g.rect.y, null, g.rect);
@@ -1056,7 +1116,9 @@ addEventListener('keydown', e => {
     if (e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (e.key.toLowerCase() === 'c' && selected && isOwner()) { e.preventDefault(); clipboardFrame = selected; toast(`Copied “${S.frames.find(f => f.id === selected)?.name}” — ⌘V to paste`, 1600); return; }
     if (e.key.toLowerCase() === 'v' && clipboardFrame && isOwner()) { e.preventDefault(); if (S.frames.find(f => f.id === clipboardFrame)) duplicateFrame(clipboardFrame); else toast('The copied frame no longer exists'); return; }
+    if (e.key.toLowerCase() === 'd' && multi.size && isOwner()) { e.preventDefault(); [...multi].forEach(id => duplicateFrame(id)); return; }
     if (e.key.toLowerCase() === 'd' && selected && isOwner()) { e.preventDefault(); duplicateFrame(selected); return; }
+    if (e.key.toLowerCase() === 'a' && isOwner()) { e.preventDefault(); setSelection(S.frames.map(f => f.id)); return; }
     if (e.key.toLowerCase() === 'y' && e.ctrlKey) { e.preventDefault(); redo(); return; }
     if (e.key === '0') { e.preventDefault(); view.z = 1; applyView(); }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomAt(innerWidth / 2, innerHeight / 2, 1.25); }
@@ -1075,6 +1137,8 @@ addEventListener('keydown', e => {
   else if (e.key === '=' || e.key === '+') zoomAt(innerWidth / 2, innerHeight / 2, 1.25);
   else if (e.key === '-') zoomAt(innerWidth / 2, innerHeight / 2, 0.8);
   else if (e.key === 'Escape') { if (!composer.hidden) closeComposer(); else if (openThreadId) closeThread(); else if (!$('#agent-menu').hidden || !$('#share-menu').hidden) closeMenus(); else { selectFrame(null); setTool('select'); } }
+  else if ((e.key === 'Backspace' || e.key === 'Delete') && multi.size && isOwner()) removeFrames([...multi]);
+  else if (e.altKey && isOwner() && multi.size >= 2 && ALIGN_KEYS[e.code]) { e.preventDefault(); alignSelection(ALIGN_KEYS[e.code]); }
   else if ((e.key === 'Backspace' || e.key === 'Delete') && selected && isOwner()) {
     const f = S.frames.find(x => x.id === selected);
     if (f) removeFrame(f.id).then(() => { selected = null; renderPanel(); });
@@ -1418,6 +1482,128 @@ async function removeFrame(id) {
   toast(`Deleted “${snap.frames[0].name}” — ⌘Z to undo`, 2600);
 }
 
+// ---------- multi-select + alignment ----------
+function setSelection(ids) {
+  ids = ids.filter(id => S.frames.find(f => f.id === id));
+  if (ids.length === 1) return selectFrame(ids[0]);
+  selected = null; multi.clear(); ids.forEach(id => multi.add(id));
+  for (const f of S.frames) updateFrame(f);
+  renderPanel(); renderAlignBar();
+}
+function toggleInSelection(id) {
+  const cur = new Set(multi.size ? multi : selected ? [selected] : []);
+  cur.has(id) ? cur.delete(id) : cur.add(id);
+  setSelection([...cur]);
+}
+const bbox = rs => { const x = Math.min(...rs.map(r => r.x)), y = Math.min(...rs.map(r => r.y)); return { x, y, w: Math.max(...rs.map(r => r.x + r.w)) - x, h: Math.max(...rs.map(r => r.y + r.h)) - y }; };
+async function patchMany(pos) {
+  for (const [id, p] of Object.entries(pos)) { const f = S.frames.find(x => x.id === id); if (f) { Object.assign(f, p); updateFrame(f); } }
+  positionAlignBar(); renderAllPins();
+  await Promise.all(Object.entries(pos).map(([id, p]) => api('PATCH', `/__loop/api/frames/${id}`, p)));
+}
+const ALIGN_KEYS = { KeyA: 'left', KeyD: 'right', KeyW: 'top', KeyS: 'bottom', KeyH: 'hcenter', KeyV: 'vcenter' };
+function alignSelection(how) {
+  const fs = [...multi].map(id => S.frames.find(f => f.id === id)).filter(Boolean);
+  if (fs.length < 2) return;
+  const b = bbox(fs), before = {}, after = {};
+  for (const f of fs) before[f.id] = { x: f.x, y: f.y };
+  if (how === 'hdist' || how === 'vdist') {
+    if (fs.length < 3) return toast('Select 3 or more frames to distribute', 1600);
+    const k = how === 'hdist' ? 'x' : 'y', size = how === 'hdist' ? 'w' : 'h';
+    const sorted = [...fs].sort((a, c) => a[k] - c[k]);
+    let gap = ((how === 'hdist' ? b.w : b.h) - sorted.reduce((t, f) => t + f[size], 0)) / (sorted.length - 1);
+    if (gap < 40) gap = 80; // overlapping frames: lay them out with a clean gap instead
+    let at = b[k];
+    for (const f of sorted) { after[f.id] = { ...before[f.id], [k]: Math.round(at) }; at += f[size] + gap; }
+  } else for (const f of fs) {
+    const p = { ...before[f.id] };
+    if (how === 'left') p.x = b.x; else if (how === 'right') p.x = b.x + b.w - f.w; else if (how === 'hcenter') p.x = Math.round(b.x + b.w / 2 - f.w / 2);
+    else if (how === 'top') p.y = b.y; else if (how === 'bottom') p.y = b.y + b.h - f.h; else if (how === 'vcenter') p.y = Math.round(b.y + b.h / 2 - f.h / 2);
+    after[f.id] = p;
+  }
+  patchMany(after);
+  const label = { left: 'Align left', right: 'Align right', hcenter: 'Align centres', top: 'Align top', bottom: 'Align bottom', vcenter: 'Align middles', hdist: 'Distribute horizontally', vdist: 'Distribute vertically' }[how];
+  record(label, () => patchMany(before), () => patchMany(after));
+}
+async function removeFrames(ids) {
+  const snaps = ids.map(frameSnapshot).filter(Boolean);
+  await Promise.all(ids.map(id => api('DELETE', `/__loop/api/frames/${id}`)));
+  const merged = { frames: snaps.flatMap(s => s.frames), comments: snaps.flatMap(s => s.comments) };
+  record(`Delete ${ids.length} frames`, () => restore(merged), () => Promise.all(ids.map(id => api('DELETE', `/__loop/api/frames/${id}`))));
+  multi.clear(); renderAlignBar();
+  toast(`Deleted ${ids.length} frames — ⌘Z to undo`, 2600);
+}
+const ALIGN_ICONS = {
+  left: '<path d="M4 3v18"/><rect x="7" y="6" width="11" height="4" rx="1"/><rect x="7" y="14" width="7" height="4" rx="1"/>',
+  hcenter: '<path d="M12 3v18"/><rect x="5" y="6" width="14" height="4" rx="1"/><rect x="8" y="14" width="8" height="4" rx="1"/>',
+  right: '<path d="M20 3v18"/><rect x="6" y="6" width="11" height="4" rx="1"/><rect x="10" y="14" width="7" height="4" rx="1"/>',
+  top: '<path d="M3 4h18"/><rect x="6" y="7" width="4" height="11" rx="1"/><rect x="14" y="7" width="4" height="7" rx="1"/>',
+  vcenter: '<path d="M3 12h18"/><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="8" width="4" height="8" rx="1"/>',
+  bottom: '<path d="M3 20h18"/><rect x="6" y="6" width="4" height="11" rx="1"/><rect x="14" y="10" width="4" height="7" rx="1"/>',
+  hdist: '<path d="M4 4v16M20 4v16"/><rect x="9" y="7" width="6" height="10" rx="1"/>',
+  vdist: '<path d="M4 4h16M4 20h16"/><rect x="7" y="9" width="10" height="6" rx="1"/>',
+};
+const ALIGN_TITLES = { left: 'Align left (⌥A)', hcenter: 'Align horizontal centres (⌥H)', right: 'Align right (⌥D)', top: 'Align top (⌥W)', vcenter: 'Align vertical centres (⌥V)', bottom: 'Align bottom (⌥S)', hdist: 'Distribute horizontally', vdist: 'Distribute vertically' };
+function renderAlignBar() {
+  const bar = $('#align-bar');
+  if (!S || multi.size < 2 || !isOwner() || ADAPTER) { bar.hidden = true; return; }
+  if (!bar.dataset.ready) {
+    bar.innerHTML = `<span class="ab-count"></span><span class="ab-sep"></span>` + ['left', 'hcenter', 'right', '|', 'top', 'vcenter', 'bottom', '|', 'hdist', 'vdist'].map(k => k === '|' ? '<span class="ab-sep"></span>' : `<button data-align="${k}" title="${ALIGN_TITLES[k]}"><svg viewBox="0 0 24 24">${ALIGN_ICONS[k]}</svg></button>`).join('');
+    bar.addEventListener('pointerdown', e => e.stopPropagation());
+    bar.addEventListener('click', e => { const b = e.target.closest('[data-align]'); if (b) alignSelection(b.dataset.align); });
+    bar.dataset.ready = '1';
+  }
+  bar.querySelector('.ab-count').textContent = `${multi.size} frames`;
+  bar.querySelectorAll('[data-align$="dist"]').forEach(b => b.disabled = multi.size < 3);
+  bar.hidden = false;
+  positionAlignBar();
+}
+function positionAlignBar() {
+  const bar = $('#align-bar');
+  if (bar.hidden || multi.size < 2 || !S) return;
+  const fs = [...multi].map(id => S.frames.find(f => f.id === id)).filter(Boolean).map(frameView);
+  if (!fs.length) return;
+  const b = bbox(fs);
+  const cx = view.x + (b.x + b.w / 2) * view.z, top = view.y + b.y * view.z - 34;
+  const w = bar.offsetWidth || 360;
+  bar.style.left = `${Math.max(12, Math.min(cx - w / 2, innerWidth - w - 12))}px`;
+  bar.style.top = `${Math.max(60, top - 46)}px`;
+}
+
+// ---------- smart guides: frames snap to each other's edges and centres while dragging ----------
+// The pull is ~6px on screen at any zoom; keep moving to break free. Hold ⌘/Ctrl to turn it off.
+const SNAP_PX = 6;
+const xs = r => [r.x, r.x + r.w / 2, r.x + r.w], ys = r => [r.y, r.y + r.h / 2, r.y + r.h];
+function others(exclude) { const ex = exclude instanceof Set ? exclude : new Set([exclude]); return S.frames.filter(f => !ex.has(f.id)).map(f => frameView(f)); }
+function bestSnap(mine, targets, th) {
+  let best = null;
+  for (const m of mine) for (const t of targets) { const d = t - m; if (Math.abs(d) <= th && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t }; }
+  return best;
+}
+// guide lines through everything sitting on the snapped line
+function guideLines(r, frames, sx, sy) {
+  const out = [], all = [r, ...frames], eps = 0.5 / view.z;
+  if (sx) { const hits = all.filter(f => xs(f).some(v => Math.abs(v - sx.at) < eps)); out.push({ x1: sx.at, y1: Math.min(...hits.map(f => f.y)), x2: sx.at, y2: Math.max(...hits.map(f => f.y + f.h)) }); }
+  if (sy) { const hits = all.filter(f => ys(f).some(v => Math.abs(v - sy.at) < eps)); out.push({ x1: Math.min(...hits.map(f => f.x)), y1: sy.at, x2: Math.max(...hits.map(f => f.x + f.w)), y2: sy.at }); }
+  return out;
+}
+function snapMove(r, exclude) {
+  const fr = others(exclude), th = SNAP_PX / view.z;
+  const sx = bestSnap(xs(r), fr.flatMap(xs), th), sy = bestSnap(ys(r), fr.flatMap(ys), th);
+  const moved = { ...r, x: r.x + (sx?.d || 0), y: r.y + (sy?.d || 0) };
+  return { dx: sx?.d || 0, dy: sy?.d || 0, guides: guideLines(moved, fr, sx, sy) };
+}
+function snapResize(r, exclude) {
+  const fr = others(exclude), th = SNAP_PX / view.z;
+  const sx = bestSnap([r.x + r.w], fr.flatMap(xs), th), sy = bestSnap([r.y + r.h], fr.flatMap(ys), th);
+  const sized = { ...r, w: r.w + (sx?.d || 0), h: r.h + (sy?.d || 0) };
+  return { dw: sx?.d || 0, dh: sy?.d || 0, guides: guideLines(sized, fr, sx, sy) };
+}
+function showGuides(lines) {
+  const g = $('#guides');
+  g.innerHTML = lines.map(l => `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}"/>`).join('');
+}
+
 // ---------- duplicate ----------
 let clipboardFrame = null;
 async function duplicateFrame(id, at) {
@@ -1436,7 +1622,7 @@ addEventListener('blur', () => vp.classList.remove('alt'));
 // ---------- keyboard shortcuts sheet ----------
 const SHORTCUTS = [
   ['Tools', [['V', 'Select & interact'], ['H  /  hold Space', 'Pan'], ['F', 'Frame (presets, or drag to draw)'], ['C', 'Comment (click = pin, drag = area)'], ['P', 'Draw'], ['E', 'Erase marks'], ['N', 'Describe a frame for the agent']]],
-  ['Edit', [['⌘Z', 'Undo'], ['⇧⌘Z  /  Ctrl Y', 'Redo'], ['⌥ drag title', 'Duplicate frame'], ['⌘C  /  ⌘V', 'Copy / paste frame'], ['⌘D', 'Duplicate in place'], ['Delete', 'Delete selected frame'], ['Double-click title', 'Rename frame'], ['Esc', 'Close / deselect']]],
+  ['Edit', [['⌘Z', 'Undo'], ['⇧⌘Z  /  Ctrl Y', 'Redo'], ['⌥ drag title', 'Duplicate frame'], ['⌘C  /  ⌘V', 'Copy / paste frame'], ['⌘D', 'Duplicate in place'], ['⇧ click  /  drag box', 'Select several frames'], ['⌘A', 'Select all frames'], ['⌥A ⌥H ⌥D', 'Align left / centre / right'], ['⌥W ⌥V ⌥S', 'Align top / middle / bottom'], ['Delete', 'Delete selected frame'], ['Double-click title', 'Rename frame'], ['Esc', 'Close / deselect']]],
   ['View', [['Pinch  /  ⌘ scroll', 'Zoom'], ['Scroll', 'Pan'], ['⇧1', 'Fit everything'], ['⌘0', 'Zoom to 100%'], ['+  /  −', 'Zoom in / out']]],
   ['Comments', [['↵', 'Send to the agent'], ['⇧↵', 'New line'], ['?', 'This list']]],
 ];
