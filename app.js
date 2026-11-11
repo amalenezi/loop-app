@@ -18,7 +18,8 @@ let tool = 'select', spaceHeld = false;
 let selected = null;           // frame id
 let openThreadId = null;
 let draft = null;
-let pendingSelect = null;   // select this frame as soon as it arrives              // { frameId, anchor, ink, inkStrokes }
+let pendingSelect = null;   // select this frame as soon as it arrives
+let pendingPrompt = null;   // …and open the "what should this screen be?" box (new blank frames only)              // { frameId, anchor, ink, inkStrokes }
 let inkChip = null;            // { frameId, lx, ly }
 const myStrokes = new Set();
 const frameEls = new Map();    // id -> { el, iframe, ... }
@@ -167,7 +168,7 @@ function makeFrame(f) {
       <span class="step"></span><span class="elapsed"></span><span class="updated"></span>
       <button class="stop" title="Stop the agent">Stop</button>
     </div>
-    <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="empty-hint"><b>✦ Describe this screen</b><span>Click to tell the agent what goes here</span></div><div class="shield"></div><div class="pins"></div><div class="progress"></div></div>
+    <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="empty-hint"><b>✦ Describe this screen</b><span>Click to tell the agent what goes here</span></div><div class="shield"></div><div class="areas"></div><div class="progress"></div></div><div class="pins"></div>
     <div class="resize"></div>`;
   framesEl.appendChild(el);
   const fe = { el, iframe: el.querySelector('iframe'), label: el.querySelector('.frame-label'), name: el.querySelector('.name'), dims: el.querySelector('.dims'), kind: el.querySelector('.kind'), count: el.querySelector('.count'), step: el.querySelector('.step'), elapsed: el.querySelector('.elapsed'), updated: el.querySelector('.updated'), pins: el.querySelector('.pins'), restore: null };
@@ -226,7 +227,7 @@ function updateFrame(f0) {
   fe.el.classList.toggle('selected', selected === f.id);
   fe.el.classList.toggle('live', tool === 'select' && selected === f.id && !spaceHeld);
   fe.dims.textContent = `${Math.round(f.w)} × ${Math.round(f.h)}`;
-  if (pendingSelect === f.id) { pendingSelect = null; queueMicrotask(() => { selectFrame(f.id); revealFrame(f.id); setTimeout(() => openPrompt(f.id), 340); }); }
+  if (pendingSelect === f.id) { const ask = pendingPrompt === f.id; pendingSelect = pendingPrompt = null; queueMicrotask(() => { selectFrame(f.id); revealFrame(f.id); if (ask) setTimeout(() => openPrompt(f.id), 340); }); }
 }
 
 function elapsed(t) { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }
@@ -426,6 +427,7 @@ function threadStatus(rootId) {
 function rootsOf(fid) { return S.comments.filter(c => c.frameId === fid && !c.parentId && c.kind !== 'create').sort((a, b) => a.createdAt - b.createdAt); }
 function renderAllPins() { for (const f of S.frames) renderPins(f.id); renderPins(CANVAS); }
 function pinsBox(fid) { return fid === CANVAS ? $('#canvas-pins') : frameEls.get(fid)?.pins; }
+function areasBox(fid) { return fid === CANVAS ? $('#canvas-pins') : frameEls.get(fid)?.el.querySelector('.areas'); }
 function renderPins(fid) {
   const box = pinsBox(fid); if (!box) return;
   const fe = { pins: box };
@@ -441,8 +443,8 @@ function renderPins(fid) {
       p.innerHTML = `<div class="pin-dot"></div>`;
       p.addEventListener('pointerdown', e => e.stopPropagation());
       if (!w.draft) p.addEventListener('click', e => { e.stopPropagation(); openThread(w.key); });
-      p.addEventListener('pointerenter', () => box.querySelector(`.area[data-key="${w.key}"]`)?.classList.add('hover'));
-      p.addEventListener('pointerleave', () => box.querySelector(`.area[data-key="${w.key}"]`)?.classList.remove('hover'));
+      p.addEventListener('pointerenter', () => areasBox(fid)?.querySelector(`.area[data-key="${w.key}"]`)?.classList.add('hover'));
+      p.addEventListener('pointerleave', () => areasBox(fid)?.querySelector(`.area[data-key="${w.key}"]`)?.classList.remove('hover'));
       fe.pins.appendChild(p);
     }
     p.querySelector('.pin-dot').textContent = w.n;
@@ -452,17 +454,18 @@ function renderPins(fid) {
   // highlighted areas (below the pins); visible while composing, on pin hover, and while the thread is open
   const areas = want.filter(w => (w.draft ? draft?.area : w.c?.anchor?.scope === 'area' || w.c?.anchor?.area));
   const akeys = new Set(areas.map(w => w.key));
-  box.querySelectorAll('.area:not(.picking)').forEach(a => { if (!akeys.has(a.dataset.key)) a.remove(); });
+  const abox = areasBox(fid);
+  abox.querySelectorAll('.area:not(.picking)').forEach(a => { if (!akeys.has(a.dataset.key)) a.remove(); });
   for (const w of areas) {
-    let a = box.querySelector(`.area[data-key="${w.key}"]`);
-    if (!a) { a = document.createElement('div'); a.dataset.key = w.key; box.prepend(a); }
+    let a = abox.querySelector(`.area[data-key="${w.key}"]`);
+    if (!a) { a = document.createElement('div'); a.dataset.key = w.key; abox.prepend(a); }
     a.className = `area${w.draft ? ' draft show' : ''}${openThreadId === w.key ? ' show' : ''}`;
   }
   positionPins(fid);
 }
 function positionPins(fid) {
   const box = pinsBox(fid); if (!box || !S) return;
-  box.querySelectorAll('.area[data-key]').forEach(el => {
+  areasBox(fid)?.querySelectorAll('.area[data-key]').forEach(el => {
     const a = el.dataset.key === '__draft' ? draft?.anchor : S.comments.find(c => c.id === el.dataset.key)?.anchor;
     if (!a) return;
     const { x, y } = anchorPos(fid, a);
@@ -721,7 +724,7 @@ function agentLine(c) {
     case 'waiting': return `<div class="agent-line waiting"><span class="a-ic"></span><div><div>Waiting for the host to send this to the agent.</div>${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Send to agent</button></div>` : ''}</div></div>`;
     case 'queued': return `<div class="agent-line working"><span class="a-ic">${CHECK}</span><div><div class="a-text">${S.agent.mode === 'inbox' ? 'Queued for your agent — run loop inbox --wait' : 'Queued — waiting for the frame to be free'}</div>${owner ? `<div class="a-actions"><button class="quiet" data-act="cancel" data-id="${c.id}">Cancel</button></div>` : ''}</div></div>`;
     case 'working': return `<div class="agent-line working"><span class="a-ic">${CHECK}</span><div><div>${c.model ? `<span class="a-model">${esc(prettyModel(c.model))}</span> ` : ''}<span class="a-text" data-step-for="${c.id}">${esc(live?.commentId === c.id ? live.step : 'Working…')}</span> <span class="muted" data-elapsed-from="${live?.startedAt || c.createdAt}"></span></div>${owner ? `<div class="a-actions"><button class="quiet" data-act="cancel" data-id="${c.id}">Stop</button></div>` : ''}</div></div>`;
-    case 'done': return `<div class="agent-line"><span class="a-ic">${CHECK}</span><div><div>${esc(c.undone ? 'Reverted.' : c.reply || 'Done.')}</div>${runMeta(c)}${owner && c.snapshot && !c.undone ? `<div class="a-actions"><button class="quiet" data-act="undo" data-id="${c.id}">Undo change</button></div>` : ''}</div></div>`;
+    case 'done': return `<div class="agent-line"><span class="a-ic">${CHECK}</span><div><div>${esc(c.undone ? 'Reverted.' : c.reply || 'Done.')}</div>${runMeta(c)}${owner && c.snapshot && !c.undone ? `<div class="a-actions"><button class="quiet" data-act="undo" data-id="${c.id}">Undo change</button></div>` : ''}${owner && c.undone && c.redoSnap ? `<div class="a-actions"><button class="quiet" data-act="redo" data-id="${c.id}">Redo change</button></div>` : ''}</div></div>`;
     case 'error': return `<div class="agent-line error"><span class="a-ic">${CHECK}</span><div><div>${esc(c.reply || 'Something went wrong.')}</div>${runMeta(c)}${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Retry</button></div>` : ''}</div></div>`;
     case 'canceled': return `<div class="agent-line waiting"><span class="a-ic"></span><div><div>Stopped.</div>${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Send again</button></div>` : ''}</div></div>`;
     default: return '';
@@ -778,8 +781,20 @@ threadEl.addEventListener('click', async e => {
     if (act === 'close') return closeThread();
     if (act === 'delete') { if (confirm('Delete this comment thread?')) { await api('DELETE', `/__loop/api/comments/${openThreadId}`); closeThread(); } return; }
     if (act === 'resolve') { await api('POST', `/__loop/api/comments/${openThreadId}/resolve`); return; }
+    if (act === 'undo') {
+      let r = await fetch(`/__loop/api/comments/${id}/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      let j = await r.json().catch(() => ({}));
+      if (r.status === 409 && j.error === 'newer') {
+        if (!confirm(`This frame has ${j.newer} newer change${j.newer === 1 ? '' : 's'} after this one. Undoing this reverts ${j.newer === 1 ? 'it' : 'them'} too. Continue?`)) return;
+        r = await fetch(`/__loop/api/comments/${id}/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ force: true }) });
+        j = await r.json().catch(() => ({}));
+      }
+      if (!r.ok) throw new Error(j.error || 'Could not undo');
+      toast(j.reverted > 1 ? `Reverted ${j.reverted} changes` : 'Change reverted');
+      return;
+    }
     await api('POST', `/__loop/api/comments/${id}/${act}`);
-    if (act === 'undo') toast('Change reverted');
+    if (act === 'redo') toast('Change re-applied');
   } catch (err) { toast(err.message); }
 });
 composer.addEventListener('pointerdown', e => e.stopPropagation());
@@ -829,7 +844,7 @@ function startPan(e) {
 }
 function startMove(fid, e) {
   const f = S.frames.find(x => x.id === fid);
-  gesture = { type: 'move', fid, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, moved: false };
+  gesture = { type: 'move', fid, sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y, moved: false, dup: e.altKey };
   vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
 }
 function startDraw(e) {
@@ -871,6 +886,16 @@ vp.addEventListener('pointermove', e => {
   }
   const g = gesture;
   if (g.type === 'pan') { view.x = g.vx + e.clientX - g.sx; view.y = g.vy + e.clientY - g.sy; applyView(); }
+  else if (g.type === 'move' && g.dup) {
+    // ⌥/Alt-drag: the original stays; an outline of the copy follows the pointer
+    g.moved = true;
+    const f = S.frames.find(x => x.id === g.fid);
+    g.to = { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z };
+    const ghost = $('#dup-ghost');
+    Object.assign(ghost.style, { left: `${g.to.x}px`, top: `${g.to.y}px`, width: `${f.w}px`, height: `${f.h}px` });
+    ghost.querySelector('span').textContent = `${f.name} copy`;
+    ghost.hidden = false;
+  }
   else if (g.type === 'move') {
     g.moved = true;
     drag.set(g.fid, { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z });
@@ -886,8 +911,8 @@ vp.addEventListener('pointermove', e => {
       a = clamp(localFromClient(g.fid, g.sx, g.sy)); b = clamp(localFromClient(g.fid, e.clientX, e.clientY));
     }
     g.rect = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
-    let box = pinsBox(g.fid).querySelector('.area.picking');
-    if (!box) { box = document.createElement('div'); box.className = 'area picking show'; pinsBox(g.fid).prepend(box); }
+    let box = areasBox(g.fid).querySelector('.area.picking');
+    if (!box) { box = document.createElement('div'); box.className = 'area picking show'; areasBox(g.fid).prepend(box); }
     Object.assign(box.style, { left: `${g.rect.x}px`, top: `${g.rect.y}px`, width: `${g.rect.w}px`, height: `${g.rect.h}px` });
   } else if (g.type === 'draw') {
     const p = toWorld(e.clientX, e.clientY);
@@ -925,6 +950,11 @@ const endGesture = async e => {
     $('#draw-box').hidden = true;
     const r = g.rect;
     if (r && r.w * view.z > 12 && r.h * view.z > 12) createBlank('Frame', r.w, r.h, r.x, r.y);
+    return;
+  }
+  if (g.type === 'move' && g.dup) {
+    $('#dup-ghost').hidden = true;
+    if (g.moved && g.to) duplicateFrame(g.fid, g.to);
     return;
   }
   if ((g.type === 'move' && g.moved) || g.type === 'resize') {
@@ -981,6 +1011,9 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && !spaceHeld) { spaceHeld = true; vp.classList.add('panning'); if (S) S.frames.forEach(updateFrame); e.preventDefault(); return; }
   if (e.metaKey || e.ctrlKey) {
     if (e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+    if (e.key.toLowerCase() === 'c' && selected && isOwner()) { e.preventDefault(); clipboardFrame = selected; toast(`Copied “${S.frames.find(f => f.id === selected)?.name}” — ⌘V to paste`, 1600); return; }
+    if (e.key.toLowerCase() === 'v' && clipboardFrame && isOwner()) { e.preventDefault(); if (S.frames.find(f => f.id === clipboardFrame)) duplicateFrame(clipboardFrame); else toast('The copied frame no longer exists'); return; }
+    if (e.key.toLowerCase() === 'd' && selected && isOwner()) { e.preventDefault(); duplicateFrame(selected); return; }
     if (e.key.toLowerCase() === 'y' && e.ctrlKey) { e.preventDefault(); redo(); return; }
     if (e.key === '0') { e.preventDefault(); view.z = 1; applyView(); }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomAt(innerWidth / 2, innerHeight / 2, 1.25); }
@@ -1241,11 +1274,11 @@ async function createBlank(base, w, h, x, y) {
   const pos = x != null ? { x: Math.round(x), y: Math.round(y) } : freeSpot(w, h);
   try {
     const f = await api('POST', '/__loop/api/frames', { new: true, blank: true, name: uniqueName(base), w: Math.round(w), h: Math.round(h), ...pos });
-    pendingSelect = f.id;
+    pendingSelect = f.id; pendingPrompt = f.id;
     let snap = null;
     record('Add frame', async () => { snap = frameSnapshot(f.id) || snap; await api('DELETE', `/__loop/api/frames/${f.id}`); }, () => restore(snap || { frames: [f] }));
     setTool('select');
-    if (S.frames.find(x => x.id === f.id)) { pendingSelect = null; selectFrame(f.id); revealFrame(f.id); }
+    if (S.frames.find(x => x.id === f.id)) { pendingSelect = pendingPrompt = null; selectFrame(f.id); revealFrame(f.id); setTimeout(() => openPrompt(f.id), 340); }
   } catch (e) { toast(e.message); }
 }
 function renderPanel() {
@@ -1342,10 +1375,25 @@ async function removeFrame(id) {
   toast(`Deleted “${snap.frames[0].name}” — ⌘Z to undo`, 2600);
 }
 
+// ---------- duplicate ----------
+let clipboardFrame = null;
+async function duplicateFrame(id, at) {
+  try {
+    const nf = await api('POST', `/__loop/api/frames/${id}/duplicate`, at ? { x: Math.round(at.x), y: Math.round(at.y) } : {});
+    let snap = null;
+    record('Duplicate frame', async () => { snap = frameSnapshot(nf.id) || snap; await api('DELETE', `/__loop/api/frames/${nf.id}`); }, () => restore(snap || { frames: [nf] }));
+    if (S.frames.find(f => f.id === nf.id)) { selectFrame(nf.id); revealFrame(nf.id); } else pendingSelect = nf.id;
+  } catch (e) { toast(e.message); }
+}
+// holding ⌥/Alt over a frame title shows the copy cursor
+addEventListener('keydown', e => { if (e.key === 'Alt') vp.classList.add('alt'); });
+addEventListener('keyup', e => { if (e.key === 'Alt') vp.classList.remove('alt'); });
+addEventListener('blur', () => vp.classList.remove('alt'));
+
 // ---------- keyboard shortcuts sheet ----------
 const SHORTCUTS = [
   ['Tools', [['V', 'Select & interact'], ['H  /  hold Space', 'Pan'], ['F', 'Frame (presets, or drag to draw)'], ['C', 'Comment (click = pin, drag = area)'], ['P', 'Draw'], ['E', 'Erase marks'], ['N', 'Describe a frame for the agent']]],
-  ['Edit', [['⌘Z', 'Undo'], ['⇧⌘Z  /  Ctrl Y', 'Redo'], ['Delete', 'Delete selected frame'], ['Double-click title', 'Rename frame'], ['Esc', 'Close / deselect']]],
+  ['Edit', [['⌘Z', 'Undo'], ['⇧⌘Z  /  Ctrl Y', 'Redo'], ['⌥ drag title', 'Duplicate frame'], ['⌘C  /  ⌘V', 'Copy / paste frame'], ['⌘D', 'Duplicate in place'], ['Delete', 'Delete selected frame'], ['Double-click title', 'Rename frame'], ['Esc', 'Close / deselect']]],
   ['View', [['Pinch  /  ⌘ scroll', 'Zoom'], ['Scroll', 'Pan'], ['⇧1', 'Fit everything'], ['⌘0', 'Zoom to 100%'], ['+  /  −', 'Zoom in / out']]],
   ['Comments', [['↵', 'Send to the agent'], ['⇧↵', 'New line'], ['?', 'This list']]],
 ];
