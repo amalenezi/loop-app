@@ -93,7 +93,9 @@ code { font: 12px/1.5 var(--mono); }
 .frame .resize { position: absolute; right: calc(-6px / var(--z, 1)); bottom: calc(-6px / var(--z, 1)); width: calc(14px / var(--z, 1)); height: calc(14px / var(--z, 1)); cursor: nwse-resize; display: none; }
 .frame .resize::after { content: ""; position: absolute; inset: 25%; background: var(--surface); border: calc(1.5px / var(--z, 1)) solid var(--accent); border-radius: 2px; }
 #viewport[data-tool="select"] .frame.selected .resize { display: block; }
-.frame .pins { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+/* pins float on their own layer above frames (never clipped); areas stay clipped inside the frame */
+.frame .pins { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 6; }
+.frame .areas { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 
 /* ---------- pins ---------- */
 .pin { position: absolute; width: 0; height: 0; pointer-events: auto; }
@@ -324,6 +326,11 @@ code { font: 12px/1.5 var(--mono); }
 #canvas-pins { position: absolute; left: 0; top: 0; width: 0; height: 0; }
 #canvas-pins .pin-dot { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1.5px var(--ink), var(--shadow); }
 #canvas-pins .pin.working .pin-dot, #canvas-pins .pin.draft .pin-dot { background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #fff, var(--shadow); }
+
+/* duplicate */
+#dup-ghost { position: absolute; pointer-events: none; border: calc(1.5px / var(--z, 1)) dashed var(--accent); background: var(--accent-soft); border-radius: 2px; }
+#dup-ghost span { position: absolute; left: 0; bottom: 100%; transform-origin: 0 100%; scale: calc(1 / var(--z, 1)); padding-bottom: 6px; font: 500 12.5px var(--font); color: var(--accent); white-space: nowrap; }
+#viewport.alt[data-tool="select"] .frame-label { cursor: copy; }
 
 /* frame tool */
 #viewport[data-tool="frame"] { cursor: crosshair; }
