@@ -49,6 +49,7 @@ code { font: 12px/1.5 var(--mono); }
 #viewport[data-tool="hand"], #viewport.panning { cursor: grab; }
 #viewport.panning:active, #viewport.dragging { cursor: grabbing; }
 #viewport[data-tool="pen"], #viewport[data-tool="pen"] .shield { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M4.5 27.5l2.2-7.4L20.6 6.2a3.2 3.2 0 014.5 0l.7.7a3.2 3.2 0 010 4.5L11.9 25.3z' fill='%2317171A' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M18.3 8.5l5.2 5.2' stroke='white' stroke-width='1.8'/%3E%3Cpath d='M4.5 27.5l2.2-7.4 5.2 5.2z' fill='%23E5484D' stroke='white' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") 4 28, crosshair; }
+#viewport[data-tool="deep"], #viewport[data-tool="deep"] .shield { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Crect x='11' y='11' width='13' height='13' rx='2' fill='rgba(47,91,255,.15)' stroke='%232F5BFF' stroke-width='1.6' stroke-dasharray='2.6 2.2'/%3E%3Cpath d='M3 3l10.5 5.4-4.4 1.4-1.9 4.2z' fill='%2317171A' stroke='white' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") 3 3, default; }
 #viewport[data-tool="comment"] { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Cpath d='M3 23V8a5 5 0 015-5h10a5 5 0 015 5v6a5 5 0 01-5 5H8z' fill='%232F5BFF' stroke='white' stroke-width='2'/%3E%3C/svg%3E") 3 23, crosshair; }
 #viewport[data-tool="erase"], #viewport[data-tool="erase"] .shield, #viewport[data-tool="erase"] #ink path { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Ccircle cx='13' cy='13' r='11' fill='rgba(255,255,255,.35)' stroke='%2317171A' stroke-width='1.5'/%3E%3Ccircle cx='13' cy='13' r='12' fill='none' stroke='white' stroke-width='1'/%3E%3C/svg%3E") 13 13, cell; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
@@ -90,9 +91,19 @@ code { font: 12px/1.5 var(--mono); }
 .frame .progress { position: absolute; left: 0; right: 0; top: 0; height: calc(3px / var(--z, 1)); overflow: hidden; pointer-events: none; opacity: 0; transition: opacity .2s; }
 .frame.working .progress { opacity: 1; }
 .frame .progress::after { content: ""; position: absolute; top: 0; bottom: 0; width: 35%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: sweep 1.4s ease-in-out infinite; }
-.frame .resize { position: absolute; right: calc(-6px / var(--z, 1)); bottom: calc(-6px / var(--z, 1)); width: calc(14px / var(--z, 1)); height: calc(14px / var(--z, 1)); cursor: nwse-resize; display: none; }
-.frame .resize::after { content: ""; position: absolute; inset: 25%; background: var(--surface); border: calc(1.5px / var(--z, 1)) solid var(--accent); border-radius: 2px; }
+/* resize from every edge and corner (edges are invisible strips; corners show small squares) */
+.frame .resize { position: absolute; display: none; z-index: 7; --t: calc(10px / var(--z, 1)); }
 #viewport[data-tool="select"] .frame.selected .resize { display: block; }
+.frame .rz-n, .frame .rz-s { left: var(--t); right: var(--t); height: var(--t); cursor: ns-resize; }
+.frame .rz-n { top: calc(var(--t) / -2); } .frame .rz-s { bottom: calc(var(--t) / -2); }
+.frame .rz-e, .frame .rz-w { top: var(--t); bottom: var(--t); width: var(--t); cursor: ew-resize; }
+.frame .rz-e { right: calc(var(--t) / -2); } .frame .rz-w { left: calc(var(--t) / -2); }
+.frame .rz-ne, .frame .rz-nw, .frame .rz-se, .frame .rz-sw { width: calc(var(--t) * 1.4); height: calc(var(--t) * 1.4); }
+.frame .rz-nw { left: calc(var(--t) * -.7); top: calc(var(--t) * -.7); cursor: nwse-resize; }
+.frame .rz-se { right: calc(var(--t) * -.7); bottom: calc(var(--t) * -.7); cursor: nwse-resize; }
+.frame .rz-ne { right: calc(var(--t) * -.7); top: calc(var(--t) * -.7); cursor: nesw-resize; }
+.frame .rz-sw { left: calc(var(--t) * -.7); bottom: calc(var(--t) * -.7); cursor: nesw-resize; }
+.frame .rz-ne::after, .frame .rz-nw::after, .frame .rz-se::after, .frame .rz-sw::after { content: ""; position: absolute; inset: 30%; background: #fff; border: calc(1.5px / var(--z, 1)) solid var(--accent); border-radius: calc(1.5px / var(--z, 1)); }
 /* pins float on their own layer above frames (never clipped); areas stay clipped inside the frame */
 .frame .pins { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 6; }
 .frame .areas { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -315,6 +326,10 @@ code { font: 12px/1.5 var(--mono); }
 #fp-name:hover { border-color: var(--line); }
 #fp-name:focus { border-color: var(--accent); background: var(--surface-2); }
 
+/* deep select */
+.deep-box { position: absolute; pointer-events: none; border: calc(2px / var(--z, 1)) solid var(--accent); background: rgba(47, 91, 255, .08); border-radius: calc(2px / var(--z, 1)); }
+.deep-box::before { content: attr(data-tag); position: absolute; left: calc(-2px / var(--z, 1)); bottom: 100%; transform-origin: 0 100%; scale: calc(1 / var(--z, 1)); font: 500 10.5px/1 var(--mono); color: #fff; background: var(--accent); padding: 4px 5px; border-radius: 3px 3px 3px 0; margin-bottom: calc(2px / var(--z, 1)); white-space: nowrap; }
+
 /* area comments */
 .area { position: absolute; pointer-events: none; border: calc(2px / var(--z, 1)) solid var(--accent); background: rgba(47, 91, 255, .10); border-radius: calc(3px / var(--z, 1)); opacity: 0; transition: opacity .15s; }
 .area.show, .area.hover { opacity: 1; }
@@ -353,7 +368,7 @@ code { font: 12px/1.5 var(--mono); }
 
 /* smart guides */
 #guides { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 8; }
-#guides line { stroke: #F24E6E; stroke-width: calc(1px / var(--z, 1)); }
+#guides line { stroke: #FF2D55; stroke-width: calc(0.6px / var(--z, 1)); shape-rendering: crispEdges; }
 
 /* duplicate */
 #dup-ghost { position: absolute; pointer-events: none; border: calc(1.5px / var(--z, 1)) dashed var(--accent); background: var(--accent-soft); border-radius: 2px; }
