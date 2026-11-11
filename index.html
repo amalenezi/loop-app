@@ -6,7 +6,7 @@
 <title>Loop</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="app.css?v=mwbdjl8c">
+<link rel="stylesheet" href="app.css?v=mwbe44g1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%2317171A'/%3E%3Ccircle cx='16' cy='16' r='6.5' stroke='%23F4F3EF' stroke-width='2.6' fill='none'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -48,13 +48,17 @@
 
 <div id="agent-menu" class="menu" hidden>
   <div class="menu-title">Comments go to</div>
-  <button class="menu-item" data-mode="headless">
+  <button class="menu-item" data-mode="headless" data-runner="claude">
     <span class="radio"></span>
-    <span><b>Claude Code, run by Loop</b><small>Each comment starts a headless run on that frame. Hands-free.</small></span>
+    <span><b>Claude Code, run by Loop</b><small>Each comment starts Claude Code in the background on that frame. Hands-free.</small></span>
+  </button>
+  <button class="menu-item" data-mode="headless" data-runner="codex">
+    <span class="radio"></span>
+    <span><b>Codex, run by Loop</b><small>Each comment starts Codex in the background on that frame. Hands-free.</small></span>
   </button>
   <button class="menu-item" data-mode="inbox">
     <span class="radio"></span>
-    <span><b>Your agent session</b><small>Comments queue up; your open agent pulls them with <code>loop inbox --wait</code>.</small></span>
+    <span><b>The chat that launched Loop</b><small>Comments show up in that chat and it replies here, so you can carry on in either place. If the chat isn't listening, Loop runs them in the background.</small></span>
   </button>
 </div>
 
@@ -174,7 +178,7 @@
 .g-av img, .acct img { width: 100%; height: 100%; object-fit: cover; }
 .acct { width: 34px; height: 34px; border-radius: 10px; box-shadow: var(--shadow); }
 </style>
-<script src="config.js?v=mwbdjl8c"></script>
-<script src="cloud.js?v=mwbdjl8c" type="module"></script>
+<script src="config.js?v=mwbe44g1"></script>
+<script src="cloud.js?v=mwbe44g1" type="module"></script>
 </body>
 </html>
