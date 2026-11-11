@@ -341,6 +341,15 @@ code { font: 12px/1.5 var(--mono); }
 #align-bar svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 #align-bar .ab-count { font: 500 12px var(--font); color: var(--ink-2); padding: 0 8px 0 6px; white-space: nowrap; }
 #align-bar .ab-sep { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }
+#align-bar .ab-spacing { display: flex; align-items: center; gap: 6px; padding-right: 4px; animation: softIn .18s ease-out; }
+#align-bar .ab-spacing[hidden] { display: none; }
+#align-bar .ab-scrub { width: 26px; height: 28px; display: grid; place-items: center; color: var(--accent); cursor: ew-resize; border-radius: 6px; }
+#align-bar .ab-scrub:hover { background: var(--accent-soft); }
+#align-bar .ab-range { width: 120px; accent-color: var(--accent); cursor: pointer; }
+#align-bar .ab-num { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-2); }
+#align-bar .ab-num:focus-within { border-color: var(--accent); }
+#align-bar .ab-val { width: 38px; border: 0; outline: 0; background: transparent; font: 12px var(--mono); color: var(--ink); text-align: right; }
+#align-bar .ab-num small { font: 11px var(--mono); color: var(--muted); }
 
 /* smart guides */
 #guides { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 8; }
