@@ -126,7 +126,8 @@ function fitAll(animate = true, ids) {
 // ---------- render ----------
 function render() {
   if (!S) return;
-  $('#canvas-name').textContent = S.name;
+  if (!$('#canvas-name').querySelector('input')) $('#canvas-name').textContent = S.name;
+  $('#canvas-name').classList.toggle('editable', isOwner() && !ADAPTER);
   document.title = `${S.name} — Loop`;
   $('#empty').hidden = S.frames.length > 0;
   renderAgentPill();
@@ -153,7 +154,7 @@ function makeFrame(f) {
       <span class="step"></span><span class="elapsed"></span><span class="updated"></span>
       <button class="stop" title="Stop the agent">Stop</button>
     </div>
-    <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="empty-hint"><b>Empty frame</b><span>Press C and click here to tell the agent what goes on this screen</span></div><div class="shield"></div><div class="pins"></div><div class="progress"></div></div>
+    <div class="frame-body"><iframe title="${esc(f.name)}"></iframe><div class="empty-hint"><b>✦ Describe this screen</b><span>Click to tell the agent what goes here</span></div><div class="shield"></div><div class="pins"></div><div class="progress"></div></div>
     <div class="resize"></div>`;
   framesEl.appendChild(el);
   const fe = { el, iframe: el.querySelector('iframe'), label: el.querySelector('.frame-label'), name: el.querySelector('.name'), dims: el.querySelector('.dims'), kind: el.querySelector('.kind'), count: el.querySelector('.count'), step: el.querySelector('.step'), elapsed: el.querySelector('.elapsed'), updated: el.querySelector('.updated'), pins: el.querySelector('.pins'), restore: null };
@@ -201,7 +202,7 @@ function updateFrame(f0) {
   fe.el.classList.toggle('selected', selected === f.id);
   fe.el.classList.toggle('live', tool === 'select' && selected === f.id && !spaceHeld);
   fe.dims.textContent = `${Math.round(f.w)} × ${Math.round(f.h)}`;
-  if (pendingSelect === f.id) { pendingSelect = null; queueMicrotask(() => { selectFrame(f.id); revealFrame(f.id); }); }
+  if (pendingSelect === f.id) { pendingSelect = null; queueMicrotask(() => { selectFrame(f.id); revealFrame(f.id); setTimeout(() => openPrompt(f.id), 340); }); }
 }
 
 function elapsed(t) { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }
@@ -360,9 +361,9 @@ function anchorFor(fid, lx, ly) {
 const CANVAS = '__canvas'; // comments placed on the empty canvas
 function anchorPos(fid, a) {
   if (fid === CANVAS) return { x: a.wx, y: a.wy };
-  if (a.scope === 'frame' || a.scope === 'point') {
+  if (a.scope === 'frame' || a.scope === 'point' || a.scope === 'area') {
     let dx = 0, dy = 0; try { const w = frameDoc(fid).defaultView; dx = w.scrollX - (a.sx || 0); dy = w.scrollY - (a.sy || 0); } catch {}
-    return { x: a.x - (a.scope === 'point' ? dx : 0), y: a.y - (a.scope === 'point' ? dy : 0) };
+    return { x: a.x - (a.scope !== 'frame' ? dx : 0), y: a.y - (a.scope !== 'frame' ? dy : 0) };
   }
   const doc = frameDoc(fid);
   if (doc && a.selector) {
@@ -402,7 +403,7 @@ function renderPins(fid) {
   const fe = { pins: box };
   const roots = rootsOf(fid);
   const want = roots.map((c, i) => ({ key: c.id, n: i + 1, c }));
-  if (draft?.frameId === fid) want.push({ key: '__draft', n: roots.length + 1, draft: true });
+  if (draft?.frameId === fid && !draft.prompt) want.push({ key: '__draft', n: roots.length + 1, draft: true });
   const keys = new Set(want.map(w => w.key));
   fe.pins.querySelectorAll('.pin').forEach(p => { if (!keys.has(p.dataset.key)) p.remove(); });
   for (const w of want) {
@@ -412,16 +413,34 @@ function renderPins(fid) {
       p.innerHTML = `<div class="pin-dot"></div>`;
       p.addEventListener('pointerdown', e => e.stopPropagation());
       if (!w.draft) p.addEventListener('click', e => { e.stopPropagation(); openThread(w.key); });
+      p.addEventListener('pointerenter', () => box.querySelector(`.area[data-key="${w.key}"]`)?.classList.add('hover'));
+      p.addEventListener('pointerleave', () => box.querySelector(`.area[data-key="${w.key}"]`)?.classList.remove('hover'));
       fe.pins.appendChild(p);
     }
     p.querySelector('.pin-dot').textContent = w.n;
     const st = w.draft ? 'draft' : threadStatus(w.key);
     p.className = `pin ${st}${w.c?.resolved ? ' resolved' : ''}${(openThreadId === w.key || w.draft) ? ' active' : ''}`;
   }
+  // highlighted areas (below the pins); visible while composing, on pin hover, and while the thread is open
+  const areas = want.filter(w => (w.draft ? draft?.area : w.c?.anchor?.scope === 'area' || w.c?.anchor?.area));
+  const akeys = new Set(areas.map(w => w.key));
+  box.querySelectorAll('.area:not(.picking)').forEach(a => { if (!akeys.has(a.dataset.key)) a.remove(); });
+  for (const w of areas) {
+    let a = box.querySelector(`.area[data-key="${w.key}"]`);
+    if (!a) { a = document.createElement('div'); a.dataset.key = w.key; box.prepend(a); }
+    a.className = `area${w.draft ? ' draft show' : ''}${openThreadId === w.key ? ' show' : ''}`;
+  }
   positionPins(fid);
 }
 function positionPins(fid) {
   const box = pinsBox(fid); if (!box || !S) return;
+  box.querySelectorAll('.area[data-key]').forEach(el => {
+    const a = el.dataset.key === '__draft' ? draft?.anchor : S.comments.find(c => c.id === el.dataset.key)?.anchor;
+    if (!a) return;
+    const { x, y } = anchorPos(fid, a);
+    const w = a.area ? a.area.w : a.w, h = a.area ? a.area.h : a.h;
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+  });
   box.querySelectorAll('.pin').forEach(p => {
     const a = p.dataset.key === '__draft' ? draft?.anchor : S.comments.find(c => c.id === p.dataset.key)?.anchor;
     if (!a) { p.hidden = true; return; }
@@ -449,7 +468,19 @@ function placePop(el, sx, sy) {
 }
 function positionPops() {
   if (!S) return;
-  if (draft && !composer.hidden) { const p = anchorPos(draft.frameId, draft.anchor); const s = screenOf(draft.frameId, p.x, p.y); placePop(composer, s.x, s.y); }
+  if (draft?.prompt && !composer.hidden) {
+    const f = frameView(S.frames.find(x => x.id === draft.frameId));
+    if (f) {
+      const cw = composer.offsetWidth || 380, ch = composer.offsetHeight || 200;
+      const cx = view.x + (f.x + f.w / 2) * view.z, cy = view.y + (f.y + f.h / 2) * view.z;
+      // a small frame stays visible: put the prompt beside it instead of on top
+      if (f.w * view.z < cw + 40) placePop(composer, view.x + (f.x + f.w) * view.z, cy - ch / 2 + 18);
+      else {
+        composer.style.left = `${Math.max(12, Math.min(cx - cw / 2, innerWidth - cw - 12))}px`;
+        composer.style.top = `${Math.max(60, Math.min(cy - ch / 2, innerHeight - ch - 76))}px`;
+      }
+    }
+  } else if (draft && !composer.hidden) { const p = anchorPos(draft.frameId, draft.anchor); const s = screenOf(draft.frameId, p.x, p.y); placePop(composer, s.x, s.y); }
   if (openThreadId && !threadEl.hidden) {
     const c = S.comments.find(x => x.id === openThreadId);
     if (c?.anchor) { const p = anchorPos(c.frameId, c.anchor); const s = screenOf(c.frameId, p.x, p.y); placePop(threadEl, s.x, s.y); }
@@ -460,12 +491,16 @@ function positionPops() {
 // ---------- composer ----------
 function freshInk(fid) { return S.strokes.filter(s => s.frameId === fid && !s.commentId && myStrokes.has(s.id)); }
 // scope: 'element' (what you clicked), 'spot' (just that point), 'frame' (the whole frame), 'canvas' (empty canvas)
-function openComposer(fid, lx, ly, scope) {
+function openComposer(fid, lx, ly, scope, area) {
   closeThread(); hideInkChip();
-  const picked = fid === CANVAS ? null : anchorFor(fid, lx, ly);
+  composer.classList.remove('prompt');
+  const picked = fid === CANVAS ? null : area ? anchorFor(fid, area.x + area.w / 2, area.y + area.h / 2) : anchorFor(fid, lx, ly);
   const strokes = freshInk(fid);
-  draft = { frameId: fid, picked, lx, ly, inkStrokes: strokes.map(s => s.id) };
-  setScope(fid === CANVAS ? 'canvas' : 'point');
+  draft = { frameId: fid, picked, lx, ly, area: area || null, inkStrokes: strokes.map(s => s.id) };
+  setScope(fid === CANVAS ? 'canvas' : area ? 'area' : 'point');
+  const ac = $('#composer-area');
+  ac.hidden = !area;
+  if (area) ac.textContent = fid === CANVAS ? `Area · ${draft.anchor.near.length || 'no'} frame${draft.anchor.near.length === 1 ? '' : 's'}` : `Area · ${draft.anchor.elements.length} element${draft.anchor.elements.length === 1 ? '' : 's'}`;
   const chip = $('#composer-ink');
   chip.hidden = !strokes.length; chip.textContent = `${strokes.length} mark${strokes.length === 1 ? '' : 's'} attached`;
   composerInput.placeholder = isOwner()
@@ -479,15 +514,77 @@ function nearFrames(wx, wy) {
   return S.frames.map(f => ({ f, d: Math.hypot(Math.max(f.x - wx, 0, wx - f.x - f.w), Math.max(f.y - wy, 0, wy - f.y - f.h)) }))
     .sort((a, b) => a.d - b.d).slice(0, 2).filter(x => x.d < 1200).map(x => x.f.name);
 }
+// frames a canvas-level box touches
+function framesIn(r) {
+  const hit = S.frames.filter(f => f.x < r.x + r.w && f.x + f.w > r.x && f.y < r.y + r.h && f.y + f.h > r.y).map(f => f.name);
+  return hit.length ? hit : nearFrames(r.x + r.w / 2, r.y + r.h / 2);
+}
+// elements inside a frame-local box, with a little slack so a loose drag still counts; top-most only
+function areaElements(fid, r) {
+  const doc = frameDoc(fid); if (!doc?.body) return [];
+  const pad = Math.max(12, Math.min(r.w, r.h) * 0.08);
+  const L = r.x - pad, T = r.y - pad, R = r.x + r.w + pad, B = r.y + r.h + pad;
+  const inside = [];
+  for (const el of doc.body.querySelectorAll('*')) {
+    if (inside.length > 600) break;
+    const b = el.getBoundingClientRect();
+    if (!b.width || !b.height || ['SCRIPT', 'STYLE', 'LINK', 'META'].includes(el.tagName)) continue;
+    if (b.left >= L && b.top >= T && b.right <= R && b.bottom <= B) inside.push(el);
+  }
+  const set = new Set(inside);
+  let top = inside.filter(el => { for (let p = el.parentElement; p; p = p.parentElement) if (set.has(p)) return false; return true; });
+  if (!top.length) { const c = elementAt(fid, r.x + r.w / 2, r.y + r.h / 2); if (c && c !== doc.documentElement) top = [c]; }
+  return top.slice(0, 14).map(el => ({ selector: selectorFor(el), tag: el.tagName.toLowerCase(), text: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').replace(/\s+/g, ' ').trim().slice(0, 80) }));
+}
+// the smallest element that wraps the whole box (context for the agent)
+function areaContainer(fid, r) {
+  const doc = frameDoc(fid);
+  let el = elementAt(fid, r.x + r.w / 2, r.y + r.h / 2);
+  while (el && el !== doc?.body) {
+    const b = el.getBoundingClientRect();
+    if (b.left <= r.x + 2 && b.top <= r.y + 2 && b.right >= r.x + r.w - 2 && b.bottom >= r.y + r.h - 2) break;
+    el = el.parentElement;
+  }
+  return el && el !== doc?.documentElement ? { selector: selectorFor(el), tag: el.tagName.toLowerCase(), text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 80) } : null;
+}
 function setScope(scope) {
   const d = draft; if (!d) return;
   const f = S.frames.find(x => x.id === d.frameId);
   d.scope = scope;
-  if (scope === 'canvas') d.anchor = { scope, wx: d.lx, wy: d.ly, near: nearFrames(d.lx, d.ly) };
+  if (scope === 'canvas' && d.area) d.anchor = { scope, wx: d.area.x, wy: d.area.y, area: { w: d.area.w, h: d.area.h }, near: framesIn(d.area) };
+  else if (scope === 'canvas') d.anchor = { scope, wx: d.lx, wy: d.ly, near: nearFrames(d.lx, d.ly) };
+  else if (scope === 'area') d.anchor = { scope, x: d.area.x, y: d.area.y, w: d.area.w, h: d.area.h, sx: d.picked?.sx || 0, sy: d.picked?.sy || 0,
+    elements: areaElements(d.frameId, d.area), container: areaContainer(d.frameId, d.area) };
   else d.anchor = { ...(d.picked || {}), scope: 'point', x: d.lx, y: d.ly, fx: undefined, fy: undefined }; // pin stays where you clicked
   renderPins(d.frameId); positionPops();
 }
+// Empty frame → a prompt box centred on it: "What should this screen be?" with ideas for its size
+const IDEAS = {
+  Mobile: ['Login', 'Onboarding', 'Home feed', 'Profile', 'Settings', 'Checkout'],
+  Tablet: ['Dashboard', 'Reader', 'Calendar', 'Settings', 'Kanban board'],
+  Desktop: ['Landing page', 'Dashboard', 'Pricing', 'Sign up', 'Settings', 'Blog post'],
+};
+function openPrompt(fid) {
+  const f = S?.frames.find(x => x.id === fid); if (!f) return;
+  closeThread(); hideInkChip();
+  const device = f.w <= 480 ? 'Mobile' : f.w <= 1024 ? 'Tablet' : 'Desktop';
+  draft = { frameId: fid, picked: null, lx: 24, ly: 24, area: null, inkStrokes: [], prompt: true, scope: 'frame', anchor: { scope: 'frame', x: 24, y: 24 } };
+  composer.classList.add('prompt');
+  $('#prompt-title').textContent = `What should “${f.name}” be?`;
+  $('#prompt-ideas').innerHTML = IDEAS[device].map(i => `<button>${esc(i)}</button>`).join('');
+  $('#composer-area').hidden = true; $('#composer-ink').hidden = true;
+  composerInput.placeholder = device === 'Mobile' ? 'e.g. a login screen with Google sign-in and a friendly illustration' : 'e.g. a landing page for a habit tracker with pricing and testimonials';
+  composer.hidden = false; composerInput.value = ''; autosize(composerInput);
+  positionPops();
+  setTimeout(() => composerInput.focus(), 0);
+}
+$('#prompt-ideas').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  composerInput.value = `${b.textContent} screen — `; autosize(composerInput);
+  composerInput.focus(); composerInput.setSelectionRange(composerInput.value.length, composerInput.value.length);
+});
 function closeComposer() {
+  composer.classList.remove('prompt');
   const fid = draft?.frameId; draft = null; composer.hidden = true;
   if (fid) renderPins(fid);
 }
@@ -676,16 +773,18 @@ vp.addEventListener('pointerdown', e => {
   if (tool === 'frame') return startDraw(e);
   if (tool === 'erase') { gesture = { type: 'erase' }; eraseAt(e); vp.setPointerCapture(e.pointerId); return; }
   if (tool === 'comment') {
-    if (fid && e.target.closest('.frame-body')) { const { lx, ly } = localFromClient(fid, e.clientX, e.clientY); openComposer(fid, lx, ly); }
-    else if (!composer.hidden || openThreadId) { closeComposer(); closeThread(); }
-    else { const w = toWorld(e.clientX, e.clientY); openComposer(CANVAS, w.x, w.y, 'canvas'); }
+    const onFrame = fid && e.target.closest('.frame-body');
+    if (!onFrame && (!composer.hidden || openThreadId)) { closeComposer(); closeThread(); return; }
+    // click = a pin on that spot; click-and-drag = an area the comment is about
+    gesture = { type: 'cpick', fid: onFrame ? fid : CANVAS, sx: e.clientX, sy: e.clientY, area: false, rect: null };
+    vp.setPointerCapture(e.pointerId);
     return;
   }
   // select
   closeComposer();
   if (e.target.closest('.resize') && isOwner()) return startResize(fid, e);
   if (e.target.closest('.frame-label')) { selectFrame(fid); closeThread(); return isOwner() ? startMove(fid, e) : undefined; }
-  if (fid) { selectFrame(fid); closeThread(); return; }
+  if (fid) { selectFrame(fid); closeThread(); if (frameEls.get(fid)?.el.classList.contains('empty')) openPrompt(fid); return; }
   selectFrame(null); closeThread();
   startPan(e);
 });
@@ -739,6 +838,20 @@ vp.addEventListener('pointermove', e => {
     g.moved = true;
     drag.set(g.fid, { x: g.fx + (e.clientX - g.sx) / view.z, y: g.fy + (e.clientY - g.sy) / view.z });
     updateFrame(S.frames.find(f => f.id === g.fid)); positionPops();
+  } else if (g.type === 'cpick') {
+    if (!g.area && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) > 6) { g.area = true; closeComposer(); closeThread(); vp.classList.add('dragging'); }
+    if (!g.area) return;
+    let a, b;
+    if (g.fid === CANVAS) { a = toWorld(g.sx, g.sy); b = toWorld(e.clientX, e.clientY); }
+    else {
+      const f = S.frames.find(x => x.id === g.fid);
+      const clamp = p => ({ x: Math.max(0, Math.min(f.w, p.lx)), y: Math.max(0, Math.min(f.h, p.ly)) });
+      a = clamp(localFromClient(g.fid, g.sx, g.sy)); b = clamp(localFromClient(g.fid, e.clientX, e.clientY));
+    }
+    g.rect = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+    let box = pinsBox(g.fid).querySelector('.area.picking');
+    if (!box) { box = document.createElement('div'); box.className = 'area picking show'; pinsBox(g.fid).prepend(box); }
+    Object.assign(box.style, { left: `${g.rect.x}px`, top: `${g.rect.y}px`, width: `${g.rect.w}px`, height: `${g.rect.h}px` });
   } else if (g.type === 'draw') {
     const p = toWorld(e.clientX, e.clientY);
     const r = { x: Math.min(g.x0, p.x), y: Math.min(g.y0, p.y), w: Math.abs(p.x - g.x0), h: Math.abs(p.y - g.y0) };
@@ -762,6 +875,15 @@ vp.addEventListener('pointermove', e => {
 const endGesture = async e => {
   const g = gesture; if (!g) return;
   gesture = null; vp.classList.remove('dragging');
+  if (g.type === 'cpick') {
+    document.querySelectorAll('.area.picking').forEach(n => n.remove());
+    if (g.area && g.rect && g.rect.w * view.z > 8 && g.rect.h * view.z > 8) return openComposer(g.fid, g.rect.x, g.rect.y, null, g.rect);
+    if (g.area) return;
+    if (g.fid === CANVAS) { const w = toWorld(g.sx, g.sy); return openComposer(CANVAS, w.x, w.y, 'canvas'); }
+    const { lx, ly } = localFromClient(g.fid, g.sx, g.sy);
+    if (frameEls.get(g.fid)?.el.classList.contains('empty')) return openPrompt(g.fid);
+    return openComposer(g.fid, lx, ly);
+  }
   if (g.type === 'draw') {
     $('#draw-box').hidden = true;
     const r = g.rect;
@@ -1092,7 +1214,7 @@ function renderPanel() {
       <div class="fp-custom"><label>W<input id="fp-w" inputmode="numeric" value="1200"></label><label>H<input id="fp-h" inputmode="numeric" value="800"></label><button id="fp-make" class="btn-dark">Add</button></div>
       <button id="fp-describe" class="link-btn">Describe a frame and let the agent build it (N)</button>`;
   } else {
-    $('#fp-title').textContent = sel.name;
+    $('#fp-title').innerHTML = `<input id="fp-name" value="${esc(sel.name)}" title="Rename frame" spellcheck="false">`;
     const kind = sel.kind === 'route' ? `App route ${sel.src}` : sel.kind === 'url' ? 'Live URL' : 'Static frame';
     body.innerHTML = `
       <div class="fp-size"><label>W<input id="fp-sw" inputmode="numeric" value="${Math.round(sel.w)}"></label><label>H<input id="fp-sh" inputmode="numeric" value="${Math.round(sel.h)}"></label></div>
@@ -1129,6 +1251,27 @@ $('#frame-panel').addEventListener('focusout', e => {
     const f = S.frames.find(x => x.id === selected), w = +$('#fp-sw')?.value, h = +$('#fp-sh')?.value;
     if (f && (w !== Math.round(f.w) || h !== Math.round(f.h))) resizeSelected(w, h);
   }
+});
+
+// ---------- renaming ----------
+function saveFrameName(input) {
+  const f = S.frames.find(x => x.id === selected), v = input.value.trim();
+  if (f && v && v !== f.name) { f.name = v; updateFrame(f); api('PATCH', `/__loop/api/frames/${f.id}`, { name: v }).catch(e => toast(e.message)); }
+}
+$('#frame-panel').addEventListener('change', e => { if (e.target.id === 'fp-name') saveFrameName(e.target); });
+$('#frame-panel').addEventListener('keydown', e => { if (e.target.id === 'fp-name' && e.key === 'Enter') { saveFrameName(e.target); e.target.blur(); } }, true);
+$('#canvas-name').addEventListener('click', () => {
+  const el = $('#canvas-name');
+  if (!isOwner() || ADAPTER || el.querySelector('input')) return;
+  const input = document.createElement('input'); input.className = 'canvas-rename'; input.value = S.name; input.spellcheck = false;
+  el.replaceChildren(input); input.focus(); input.select();
+  const done = save => {
+    const v = input.value.trim();
+    el.textContent = save && v ? v : S.name;
+    if (save && v && v !== S.name) { S.name = v; api('POST', '/__loop/api/settings', { name: v }).catch(e => toast(e.message)); }
+  };
+  input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.value = S.name; input.blur(); } });
+  input.addEventListener('blur', () => done(true));
 });
 
 addEventListener('resize', () => positionPops());
