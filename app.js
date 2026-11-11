@@ -619,6 +619,7 @@ $('#prompt-ideas').addEventListener('click', e => {
   composerInput.focus(); composerInput.setSelectionRange(composerInput.value.length, composerInput.value.length);
 });
 function closeComposer() {
+  if (composer.classList.contains('soft')) composer.querySelector('.hint').innerHTML = '<kbd>↵</kbd> send · <kbd>⇧↵</kbd> new line · <kbd>esc</kbd>';
   composer.classList.remove('prompt', 'soft'); softFrom = null;
   if (draft?.deep) clearDeep();
   const fid = draft?.frameId; draft = null; composer.hidden = true;
@@ -704,14 +705,16 @@ function softCommentAfterStroke(frameId, pts, e) {
   draft.soft = true;
   composer.classList.add('soft');
   composerInput.placeholder = 'What should change here?';
+  composer.querySelector('.hint').innerHTML = '<kbd>↵</kbd> send · <kbd>esc</kbd> skip';
   softFrom = { x: e.clientX, y: e.clientY, t: Date.now() };
 }
-addEventListener('pointermove', e => {
-  if (!draft?.soft || composer.hidden || !softFrom || gesture) return;
-  if (composerInput.value.trim()) { draft.soft = false; composer.classList.remove('soft'); return; }
-  if (composer.contains(e.target) || Date.now() - softFrom.t < 300) return;
-  if (Math.hypot(e.clientX - softFrom.x, e.clientY - softFrom.y) > 140) closeComposer();
-});
+// It stays until you clearly dismiss it: Esc, a click elsewhere, another tool, or a new stroke (which brings it back after).
+// Clicking anywhere outside the box (but not drawing) dismisses an empty one.
+addEventListener('pointerdown', e => {
+  if (!draft?.soft || composer.hidden || composer.contains(e.target) || composerInput.value.trim()) return;
+  if (tool === 'pen' && e.target.closest('#viewport')) return; // a new stroke: handled by startStroke
+  closeComposer();
+}, true);
 composerInput.addEventListener('input', () => { if (draft?.soft && composerInput.value.trim()) { draft.soft = false; composer.classList.remove('soft'); } });
 $('#ink-chip button').addEventListener('click', () => {
   if (!inkChip) return;
@@ -834,6 +837,7 @@ composer.addEventListener('pointerdown', e => e.stopPropagation());
 function setTool(t) {
   if (t === 'frame' && !isOwner()) return;
   if (t !== 'deep' && deepSel) clearDeep();
+  if (draft?.soft && !composerInput.value.trim()) closeComposer();
   tool = t; vp.dataset.tool = t;
   document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   hoverBox.hidden = true;
