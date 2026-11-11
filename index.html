@@ -6,7 +6,7 @@
 <title>Loop</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="app.css?v=mwbd0occ">
+<link rel="stylesheet" href="app.css?v=mwbdagny">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%2317171A'/%3E%3Ccircle cx='16' cy='16' r='6.5' stroke='%23F4F3EF' stroke-width='2.6' fill='none'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -35,7 +35,7 @@
     <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="7"/><circle cx="16" cy="16" r="6.5"/></svg></span>
     <span class="wordmark">Loop</span>
     <span class="sep">/</span>
-    <span id="canvas-name" class="canvas-name"></span>
+    <span id="canvas-name" class="canvas-name" title="Rename canvas"></span>
   </div>
   <div class="top-right">
     <div id="presence" class="presence"></div>
@@ -107,9 +107,12 @@
 </div>
 
 <div id="composer" class="pop" hidden>
+  <div class="prompt-head"><span class="spark">✦</span><b id="prompt-title">What should this screen be?</b></div>
+  <div class="prompt-ideas" id="prompt-ideas"></div>
   <div class="composer-target" id="composer-target" hidden></div>
   <textarea id="composer-input" rows="1" placeholder="Comment, then ↵ to send to the agent"></textarea>
   <div class="composer-foot">
+    <span id="composer-area" class="chip chip-area" hidden></span>
     <span id="composer-ink" class="chip" hidden></span>
     <span class="hint"><kbd>↵</kbd> send · <kbd>⇧↵</kbd> new line · <kbd>esc</kbd></span>
   </div>
@@ -171,7 +174,7 @@
 .g-av img, .acct img { width: 100%; height: 100%; object-fit: cover; }
 .acct { width: 34px; height: 34px; border-radius: 10px; box-shadow: var(--shadow); }
 </style>
-<script src="config.js?v=mwbd0occ"></script>
-<script src="cloud.js?v=mwbd0occ" type="module"></script>
+<script src="config.js?v=mwbdagny"></script>
+<script src="cloud.js?v=mwbdagny" type="module"></script>
 </body>
 </html>
