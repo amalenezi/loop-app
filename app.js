@@ -102,7 +102,20 @@ function zoomAt(cx, cy, factor) {
   const z = Math.min(4, Math.max(0.04, view.z * factor));
   view.x = cx - (cx - view.x) * (z / view.z);
   view.y = cy - (cy - view.y) * (z / view.z);
-  view.z = z; applyView();
+  view.z = z; scheduleView();
+}
+// batch view updates to one per animation frame (trackpads fire many wheel events per frame)
+let viewQueued = false;
+function scheduleView() {
+  if (viewQueued) return;
+  viewQueued = true;
+  requestAnimationFrame(() => { viewQueued = false; applyView(); });
+}
+// pinch (ctrl/⌘ + wheel) → canvas zoom around the cursor; cx/cy are top-window coordinates
+function pinchZoom(e, cx, cy) {
+  e.preventDefault();
+  const dy = Math.max(-30, Math.min(30, e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY)); // cap per-event so a mouse wheel notch zooms smoothly
+  zoomAt(cx, cy, Math.exp(-dy * (e.ctrlKey && !e.metaKey ? 0.01 : 0.004)));
 }
 const toWorld = (cx, cy) => ({ x: (cx - view.x) / view.z, y: (cy - view.y) / view.z });
 function fitAll(animate = true, ids) {
@@ -165,8 +178,19 @@ function makeFrame(f) {
       fe.el.classList.toggle('empty', !!w.document.querySelector('meta[name="loop-empty"]'));
       w.addEventListener('scroll', () => positionPins(f.id), { passive: true });
       w.addEventListener('resize', () => positionPins(f.id));
+      // a pinch over a live frame zooms the canvas, not the frame's page
+      const toTop = ev => { const r = fe.iframe.getBoundingClientRect(), z = r.width / (fe.iframe.offsetWidth || 1); return [r.left + ev.clientX * z, r.top + ev.clientY * z]; };
+      w.addEventListener('wheel', ev => { if (ev.ctrlKey || ev.metaKey) pinchZoom(ev, ...toTop(ev)); }, { passive: false });
+      w.addEventListener('gesturestart', ev => { ev.preventDefault(); gs0 = view.z; });
+      w.addEventListener('gesturechange', ev => { ev.preventDefault(); const [x, y] = toTop(ev); zoomAt(x, y, (gs0 * ev.scale) / view.z); });
       // pass shortcuts through when the frame has focus
-      w.addEventListener('keydown', e => { if (e.key === 'Escape') { selectFrame(null); window.focus(); } });
+      w.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { selectFrame(null); window.focus(); }
+        const t = e.target, editing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+        if ((e.metaKey || e.ctrlKey) && !editing && (e.key.toLowerCase() === 'z' || (e.ctrlKey && e.key.toLowerCase() === 'y'))) {
+          e.preventDefault(); (e.shiftKey || e.key.toLowerCase() === 'y') ? redo() : undo();
+        }
+      });
     } catch {}
     setTimeout(() => positionPins(f.id), 60);
   });
@@ -243,7 +267,7 @@ function startRename(id) {
     if (!fe.renaming) return; fe.renaming = false;
     const v = input.value.trim();
     fe.name.textContent = save && v ? v : f.name;
-    if (save && v && v !== f.name) api('PATCH', `/__loop/api/frames/${id}`, { name: v });
+    if (save && v && v !== f.name) { const old = f.name; api('PATCH', `/__loop/api/frames/${id}`, { name: v }); record('Rename frame', () => patchFrame(id, { name: old }), () => patchFrame(id, { name: v })); }
   };
   input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
   input.addEventListener('blur', () => done(true));
@@ -819,7 +843,9 @@ function startStroke(e) {
 function eraseAt(e) {
   const el = document.elementFromPoint(e.clientX, e.clientY);
   if (el?.tagName === 'path' && el.dataset.id) {
+    const stroke = S.strokes.find(s => s.id === el.dataset.id);
     el.remove(); api('DELETE', `/__loop/api/strokes/${el.dataset.id}`).catch(() => {});
+    if (stroke) record('Erase mark', () => restore({ strokes: [stroke] }), () => api('DELETE', `/__loop/api/strokes/${stroke.id}`));
   }
 }
 vp.addEventListener('pointermove', e => {
@@ -893,9 +919,14 @@ const endGesture = async e => {
   if ((g.type === 'move' && g.moved) || g.type === 'resize') {
     const d = drag.get(g.fid);
     const f = S.frames.find(x => x.id === g.fid);
+    const before = g.type === 'move' ? { x: g.fx, y: g.fy } : { w: g.w, h: g.h };
     if (d && f) Object.assign(f, d);
     drag.delete(g.fid);
-    if (d) api('PATCH', `/__loop/api/frames/${g.fid}`, d).catch(err => toast(err.message));
+    if (d) {
+      api('PATCH', `/__loop/api/frames/${g.fid}`, d).catch(err => toast(err.message));
+      const after = { ...d }, id = g.fid;
+      record(g.type === 'move' ? 'Move frame' : 'Resize frame', () => patchFrame(id, before), () => patchFrame(id, after));
+    }
     if (g.type === 'resize') setTimeout(() => positionPins(g.fid), 50);
   } else if (g.type === 'stroke') {
     const pts = g.points;
@@ -906,6 +937,7 @@ const endGesture = async e => {
     try {
       const s = await api('POST', '/__loop/api/strokes', { points: pts, color: MARK, width: g.width, frameId });
       myStrokes.add(s.id);
+      record('Draw mark', () => api('DELETE', `/__loop/api/strokes/${s.id}`), () => restore({ strokes: [s] }));
       g.path.remove();
       if (!S.strokes.find(x => x.id === s.id)) S.strokes.push(s);
       renderInk();
@@ -917,11 +949,15 @@ vp.addEventListener('pointerup', endGesture);
 vp.addEventListener('pointercancel', endGesture);
 vp.addEventListener('pointerleave', () => { hoverBox.hidden = true; });
 
-vp.addEventListener('wheel', e => {
+// Pinch anywhere in Loop zooms the canvas (never the browser page); scrolling over the canvas pans it,
+// while panels, menus and comment threads keep their own scrolling.
+addEventListener('wheel', e => {
+  if (e.ctrlKey || e.metaKey) return pinchZoom(e, e.clientX, e.clientY);
+  if (!e.target.closest?.('#viewport')) return;
   e.preventDefault();
-  if (e.ctrlKey || e.metaKey) zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (e.ctrlKey && !e.metaKey ? 0.012 : 0.005)));
-  else { view.x -= e.deltaX; view.y -= e.deltaY; applyView(); }
-}, { passive: false });
+  const k = e.deltaMode === 1 ? 16 : 1;
+  view.x -= e.deltaX * k; view.y -= e.deltaY * k; scheduleView();
+}, { passive: false, capture: true });
 // Safari pinch
 let gs0 = 1;
 addEventListener('gesturestart', e => { e.preventDefault(); gs0 = view.z; });
@@ -933,6 +969,8 @@ addEventListener('keydown', e => {
   if (typing()) return;
   if (e.code === 'Space' && !spaceHeld) { spaceHeld = true; vp.classList.add('panning'); if (S) S.frames.forEach(updateFrame); e.preventDefault(); return; }
   if (e.metaKey || e.ctrlKey) {
+    if (e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+    if (e.key.toLowerCase() === 'y' && e.ctrlKey) { e.preventDefault(); redo(); return; }
     if (e.key === '0') { e.preventDefault(); view.z = 1; applyView(); }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomAt(innerWidth / 2, innerHeight / 2, 1.25); }
     if (e.key === '-') { e.preventDefault(); zoomAt(innerWidth / 2, innerHeight / 2, 0.8); }
@@ -952,7 +990,7 @@ addEventListener('keydown', e => {
   else if (e.key === 'Escape') { if (!composer.hidden) closeComposer(); else if (openThreadId) closeThread(); else if (!$('#agent-menu').hidden || !$('#share-menu').hidden) closeMenus(); else { selectFrame(null); setTool('select'); } }
   else if ((e.key === 'Backspace' || e.key === 'Delete') && selected && isOwner()) {
     const f = S.frames.find(x => x.id === selected);
-    if (f && confirm(`Remove “${f.name}” from the canvas? Its files stay on disk.`)) api('DELETE', `/__loop/api/frames/${f.id}`).then(() => { selected = null; });
+    if (f) removeFrame(f.id).then(() => { selected = null; renderPanel(); });
   }
 });
 addEventListener('keyup', e => { if (e.code === 'Space') { spaceHeld = false; vp.classList.remove('panning'); if (S) S.frames.forEach(updateFrame); } });
@@ -1193,6 +1231,8 @@ async function createBlank(base, w, h, x, y) {
   try {
     const f = await api('POST', '/__loop/api/frames', { new: true, blank: true, name: uniqueName(base), w: Math.round(w), h: Math.round(h), ...pos });
     pendingSelect = f.id;
+    let snap = null;
+    record('Add frame', async () => { snap = frameSnapshot(f.id) || snap; await api('DELETE', `/__loop/api/frames/${f.id}`); }, () => restore(snap || { frames: [f] }));
     setTool('select');
     if (S.frames.find(x => x.id === f.id)) { pendingSelect = null; selectFrame(f.id); revealFrame(f.id); }
   } catch (e) { toast(e.message); }
@@ -1225,7 +1265,9 @@ function renderPanel() {
 }
 async function resizeSelected(w, h) {
   const f = S.frames.find(x => x.id === selected); if (!f || !(w > 0 && h > 0)) return;
-  Object.assign(f, { w: Math.round(w), h: Math.round(h) }); updateFrame(f);
+  const before = { w: f.w, h: f.h }, after = { w: Math.round(w), h: Math.round(h) }, id = f.id;
+  if (before.w !== after.w || before.h !== after.h) record('Resize frame', () => patchFrame(id, before), () => patchFrame(id, after));
+  Object.assign(f, after); updateFrame(f);
   try { await api('PATCH', `/__loop/api/frames/${f.id}`, { w: f.w, h: f.h }); } catch (e) { toast(e.message); }
   renderPanel(); setTimeout(() => positionPins(f.id), 60);
 }
@@ -1253,10 +1295,70 @@ $('#frame-panel').addEventListener('focusout', e => {
   }
 });
 
+// ---------- undo / redo (canvas edits; agent changes have their own Undo in the thread) ----------
+const undoStack = [], redoStack = [];
+let replaying = false;
+function record(label, undoFn, redoFn) {
+  if (replaying || ADAPTER || !isOwner()) return;
+  undoStack.push({ label, undo: undoFn, redo: redoFn });
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+}
+async function step(from, to, dir) {
+  const op = from.pop();
+  if (!op) { toast(dir === 'undo' ? 'Nothing to undo' : 'Nothing to redo', 1200); return; }
+  replaying = true;
+  try { await op[dir](); to.push(op); toast(`${dir === 'undo' ? 'Undo' : 'Redo'}: ${op.label}`, 1400); }
+  catch (e) { toast(`Couldn't ${dir}: ${e.message}`); }
+  finally { replaying = false; }
+}
+const undo = () => step(undoStack, redoStack, 'undo');
+const redo = () => step(redoStack, undoStack, 'redo');
+function patchFrame(id, fields) {
+  const f = S.frames.find(x => x.id === id);
+  if (f) { Object.assign(f, fields); updateFrame(f); renderPanel(); setTimeout(() => positionPins(id), 50); }
+  return api('PATCH', `/__loop/api/frames/${id}`, fields);
+}
+const restore = data => api('POST', '/__loop/api/restore', data);
+function frameSnapshot(id) {
+  const f = S.frames.find(x => x.id === id); if (!f) return null;
+  return { frames: [{ ...f }], comments: S.comments.filter(c => c.frameId === id).map(c => ({ ...c })) };
+}
+async function removeFrame(id) {
+  const snap = frameSnapshot(id); if (!snap) return;
+  await api('DELETE', `/__loop/api/frames/${id}`);
+  record('Delete frame', () => restore(snap), () => api('DELETE', `/__loop/api/frames/${id}`));
+  toast(`Deleted “${snap.frames[0].name}” — ⌘Z to undo`, 2600);
+}
+
+// ---------- keyboard shortcuts sheet ----------
+const SHORTCUTS = [
+  ['Tools', [['V', 'Select & interact'], ['H  /  hold Space', 'Pan'], ['F', 'Frame (presets, or drag to draw)'], ['C', 'Comment (click = pin, drag = area)'], ['P', 'Draw'], ['E', 'Erase marks'], ['N', 'Describe a frame for the agent']]],
+  ['Edit', [['⌘Z', 'Undo'], ['⇧⌘Z  /  Ctrl Y', 'Redo'], ['Delete', 'Delete selected frame'], ['Double-click title', 'Rename frame'], ['Esc', 'Close / deselect']]],
+  ['View', [['Pinch  /  ⌘ scroll', 'Zoom'], ['Scroll', 'Pan'], ['⇧1', 'Fit everything'], ['⌘0', 'Zoom to 100%'], ['+  /  −', 'Zoom in / out']]],
+  ['Comments', [['↵', 'Send to the agent'], ['⇧↵', 'New line'], ['?', 'This list']]],
+];
+function toggleShortcuts(force) {
+  let m = $('#shortcuts');
+  if (!m) {
+    m = document.createElement('div'); m.id = 'shortcuts'; m.className = 'modal'; m.hidden = true;
+    m.innerHTML = `<div class="modal-card sc-card"><div class="modal-head"><span>Keyboard shortcuts</span><button class="icon-btn" data-close>×</button></div>
+      <div class="sc-grid">${SHORTCUTS.map(([g, rows]) => `<div><div class="sc-group">${g}</div>${rows.map(([k, d]) => `<div class="sc-row"><span>${esc(d)}</span><span class="sc-keys">${k.split('  /  ').map(x => `<kbd>${esc(x)}</kbd>`).join(' ')}</span></div>`).join('')}</div>`).join('')}</div></div>`;
+    document.body.appendChild(m);
+    m.addEventListener('pointerdown', e => { if (e.target === m || e.target.closest('[data-close]')) m.hidden = true; });
+  }
+  m.hidden = force === undefined ? !m.hidden : !force;
+}
+addEventListener('keydown', e => {
+  if (typing()) return;
+  if (e.key === '?') { e.preventDefault(); toggleShortcuts(); }
+  else if (e.key === 'Escape' && $('#shortcuts') && !$('#shortcuts').hidden) toggleShortcuts(false);
+});
+
 // ---------- renaming ----------
 function saveFrameName(input) {
   const f = S.frames.find(x => x.id === selected), v = input.value.trim();
-  if (f && v && v !== f.name) { f.name = v; updateFrame(f); api('PATCH', `/__loop/api/frames/${f.id}`, { name: v }).catch(e => toast(e.message)); }
+  if (f && v && v !== f.name) { const old = f.name, id = f.id; f.name = v; updateFrame(f); api('PATCH', `/__loop/api/frames/${id}`, { name: v }).catch(e => toast(e.message)); record('Rename frame', () => patchFrame(id, { name: old }), () => patchFrame(id, { name: v })); }
 }
 $('#frame-panel').addEventListener('change', e => { if (e.target.id === 'fp-name') saveFrameName(e.target); });
 $('#frame-panel').addEventListener('keydown', e => { if (e.target.id === 'fp-name' && e.key === 'Enter') { saveFrameName(e.target); e.target.blur(); } }, true);
@@ -1268,7 +1370,7 @@ $('#canvas-name').addEventListener('click', () => {
   const done = save => {
     const v = input.value.trim();
     el.textContent = save && v ? v : S.name;
-    if (save && v && v !== S.name) { S.name = v; api('POST', '/__loop/api/settings', { name: v }).catch(e => toast(e.message)); }
+    if (save && v && v !== S.name) { const old = S.name; S.name = v; api('POST', '/__loop/api/settings', { name: v }).catch(e => toast(e.message)); record('Rename canvas', () => api('POST', '/__loop/api/settings', { name: old }), () => api('POST', '/__loop/api/settings', { name: v })); }
   };
   input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.value = S.name; input.blur(); } });
   input.addEventListener('blur', () => done(true));
