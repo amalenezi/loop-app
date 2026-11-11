@@ -278,7 +278,8 @@ function renderAgentPill() {
   const pill = $('#agent-pill'), n = Object.keys(S.live).length;
   const queued = S.comments.filter(c => c.status === 'queued').length;
   const waiting = S.comments.filter(c => c.status === 'waiting').length;
-  const name = S.agent.mode === 'inbox' ? 'Your agent' : (S.agentBin === 'claude' ? 'Claude Code' : S.agentBin) + (S.agent.lastModel ? ` · ${prettyModel(S.agent.lastModel)}` : '');
+  const lastFits = S.agent.lastModel && (S.agentBin === 'codex' ? !/^claude/.test(S.agent.lastModel) : /^claude/.test(S.agent.lastModel));
+  const name = S.agent.mode === 'inbox' ? (S.chatListening ? `Your chat · ${S.agentLabel || 'agent'}` : 'Chat away · background') : (S.agentLabel || 'Claude Code') + (lastFits ? ` · ${prettyModel(S.agent.lastModel)}` : '');
   let label = name;
   if (S.hostOnline === false) label = `Host offline · comments wait`;
   if (n) label += ` · ${n} working`;
@@ -286,8 +287,11 @@ function renderAgentPill() {
   if (waiting && isOwner()) label += ` · ${waiting} to review`;
   $('#agent-label').textContent = label;
   pill.classList.toggle('busy', n > 0);
-  pill.classList.toggle('inbox', S.agent.mode === 'inbox' && !n);
-  document.querySelectorAll('#agent-menu .menu-item').forEach(b => b.classList.toggle('on', b.dataset.mode === S.agent.mode));
+  pill.classList.toggle('inbox', S.agent.mode === 'inbox' && !n && !S.chatListening);
+  document.querySelectorAll('#agent-menu .menu-item').forEach(b => {
+    b.classList.toggle('on', b.dataset.mode === S.agent.mode && (!b.dataset.runner || b.dataset.runner === S.agentBin));
+    if (b.dataset.runner) { b.hidden = S.runners && !S.runners[b.dataset.runner]; }
+  });
   if (!$('#share-menu').hidden) fillShare();
 }
 function initials(n) { return (n || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
@@ -415,7 +419,7 @@ function showHover(fid, cx, cy) {
 // ---------- pins ----------
 function threadOf(rootId) { return S.comments.filter(c => c.id === rootId || c.parentId === rootId).sort((a, b) => a.createdAt - b.createdAt); }
 function threadStatus(rootId) {
-  const t = threadOf(rootId);
+  const t = threadOf(rootId).filter(c => c.kind !== 'note');
   if (t.some(c => c.status === 'working')) return 'working';
   return t[t.length - 1]?.status || 'done';
 }
@@ -528,7 +532,7 @@ function openComposer(fid, lx, ly, scope, area) {
   const chip = $('#composer-ink');
   chip.hidden = !strokes.length; chip.textContent = `${strokes.length} mark${strokes.length === 1 ? '' : 's'} attached`;
   composerInput.placeholder = isOwner()
-    ? (S.agent.mode === 'inbox' ? 'Comment, then ↵ to queue it for your agent' : `Comment, then ↵ to send to ${S.agentBin === 'claude' ? 'Claude Code' : 'the agent'}`)
+    ? (S.agent.mode === 'inbox' ? 'Comment, then ↵ to queue it for your agent' : `Comment, then ↵ to send to ${S.agentLabel || 'the agent'}`)
     : 'Comment, then ↵ — the host sends it to the agent';
   composer.hidden = false; composerInput.value = ''; autosize(composerInput);
   renderPins(fid); positionPops();
@@ -699,7 +703,10 @@ const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now'
 function prettyModel(id) {
   if (!id) return '';
   const m = /claude-([a-z]+)-(\d+)(?:-(\d+))?/i.exec(id);
-  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] && m[3].length <= 2 ? '.' + m[3] : ''}` : id;
+  if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] && m[3].length <= 2 ? '.' + m[3] : ''}`;
+  const g = /^gpt-([\d.]+)(?:-([a-z]+))?/i.exec(id); // "gpt-6.1-sol" → "GPT-6.1 Sol"
+  if (g) return `GPT-${g[1]}${g[2] ? ' ' + g[2][0].toUpperCase() + g[2].slice(1) : ''}`;
+  return id;
 }
 function runMeta(c) {
   const bits = [];
@@ -727,7 +734,11 @@ function renderThread() {
   const n = rootsOf(root.frameId).findIndex(c => c.id === root.id) + 1;
   const draftText = threadEl.querySelector('textarea')?.value || '';
   const hadFocus = document.activeElement === threadEl.querySelector('textarea');
-  const body = threadOf(root.id).map(c => `
+  const body = threadOf(root.id).map(c => c.kind === 'note' ? `
+    <div class="msg msg-agent">
+      <div class="msg-head"><span class="av av-agent">${CHECK}</span><b>${esc(c.author?.name || 'Agent')}</b><time>${ago(c.createdAt)}</time>${c.model ? `<span class="a-model">${esc(prettyModel(c.model))}</span>` : ''}</div>
+      <div class="msg-text">${esc(c.text)}</div>
+    </div>` : `
     <div class="msg">
       <div class="msg-head"><span class="av" style="background:${esc(c.author?.color || '#888')}">${esc(initials(c.author?.name))}</span><b>${esc(c.author?.name || 'You')}</b><time>${ago(c.createdAt)}</time></div>
       <div class="msg-text">${esc(c.text)}</div>
@@ -1015,7 +1026,7 @@ $('#agent-pill').addEventListener('click', e => {
   const m = $('#agent-menu'); const was = !m.hidden; closeMenus(); if (!was) openMenuBelow(m, e.currentTarget);
 });
 document.querySelectorAll('#agent-menu .menu-item').forEach(b => b.addEventListener('click', async () => {
-  try { await api('POST', '/__loop/api/settings', { mode: b.dataset.mode }); toast(b.dataset.mode === 'inbox' ? 'Comments will queue for your agent session' : 'Loop will run Claude Code on each comment'); }
+  try { await api('POST', '/__loop/api/settings', { mode: b.dataset.mode, runner: b.dataset.runner }); toast(b.dataset.mode === 'inbox' ? 'Comments will queue for your agent session' : `Loop will run ${b.dataset.runner === 'codex' ? 'Codex' : 'Claude Code'} on each comment`); }
   catch (err) { toast(err.message); }
   closeMenus();
 }));
