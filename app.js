@@ -866,12 +866,28 @@ function startStroke(e) {
   gesture = { type: 'stroke', points: [p.x, p.y], path, width: 3 / view.z };
   vp.classList.add('dragging'); vp.setPointerCapture(e.pointerId);
 }
+// the eraser is a round brush: anything within its radius (11px on screen) is erased as you sweep
+const ERASE_R = 11;
+function segDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy;
+  const t = l ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l)) : 0;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
 function eraseAt(e) {
-  const el = document.elementFromPoint(e.clientX, e.clientY);
-  if (el?.tagName === 'path' && el.dataset.id) {
-    const stroke = S.strokes.find(s => s.id === el.dataset.id);
-    el.remove(); api('DELETE', `/__loop/api/strokes/${el.dataset.id}`).catch(() => {});
-    if (stroke) record('Erase mark', () => restore({ strokes: [stroke] }), () => api('DELETE', `/__loop/api/strokes/${stroke.id}`));
+  const p = toWorld(e.clientX, e.clientY);
+  for (const stroke of [...S.strokes]) {
+    if (stroke.commentId || String(stroke.id).startsWith('ink-')) continue; // marks attached to a comment stay
+    const r = ERASE_R / view.z + (stroke.width || 3) / 2, pts = stroke.points;
+    let hit = false;
+    for (let i = 0; i + 1 < pts.length && !hit; i += 2) {
+      const bx = i + 3 < pts.length ? pts[i + 2] : pts[i], by = i + 3 < pts.length ? pts[i + 3] : pts[i + 1];
+      hit = segDist(p.x, p.y, pts[i], pts[i + 1], bx, by) <= r;
+    }
+    if (!hit) continue;
+    S.strokes = S.strokes.filter(s => s.id !== stroke.id);
+    inkSvg.querySelector(`path[data-id="${stroke.id}"]`)?.remove();
+    api('DELETE', `/__loop/api/strokes/${stroke.id}`).catch(() => {});
+    record('Erase mark', () => restore({ strokes: [stroke] }), () => api('DELETE', `/__loop/api/strokes/${stroke.id}`));
   }
 }
 vp.addEventListener('pointermove', e => {
