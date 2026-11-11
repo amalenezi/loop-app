@@ -33,7 +33,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); font: 13px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+html, body { overscroll-behavior: none; margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); font: 13px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 input, textarea { font: inherit; color: inherit; }
 kbd { font: 500 10.5px/1 var(--mono); padding: 2px 4px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-2); }
@@ -273,6 +273,14 @@ code { font: 12px/1.5 var(--mono); }
 
 .agent-line .a-meta { font: 500 11px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
 .agent-line .a-model { font: 500 10.5px/1 var(--mono); color: var(--muted); padding: 2px 5px; border-radius: 4px; border: 1px solid var(--line); margin-right: 4px; }
+
+/* shortcuts sheet */
+.sc-card { width: min(720px, calc(100vw - 32px)); }
+.sc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px 28px; }
+.sc-group { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+.sc-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.sc-keys { display: flex; gap: 4px; flex: none; }
+@media (max-width: 640px) { .sc-grid { grid-template-columns: 1fr; } }
 
 /* empty-frame prompt */
 .prompt-head, .prompt-ideas { display: none; }
