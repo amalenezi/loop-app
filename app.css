@@ -48,9 +48,9 @@ code { font: 12px/1.5 var(--mono); }
   background-size: var(--gs, 24px) var(--gs, 24px); background-position: var(--gx, 0) var(--gy, 0); }
 #viewport[data-tool="hand"], #viewport.panning { cursor: grab; }
 #viewport.panning:active, #viewport.dragging { cursor: grabbing; }
-#viewport[data-tool="pen"] { cursor: crosshair; }
+#viewport[data-tool="pen"], #viewport[data-tool="pen"] .shield { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath d='M4 24l1.6-5.6L18.4 5.6a2.3 2.3 0 013.3 0l.7.7a2.3 2.3 0 010 3.3L9.6 22.4z' fill='%2317171A' stroke='white' stroke-width='1.6' stroke-linejoin='round'/%3E%3Cpath d='M16.4 7.6l4 4' stroke='white' stroke-width='1.4'/%3E%3Cpath d='M4 24l1.6-5.6 4 4z' fill='%23E5484D'/%3E%3C/svg%3E") 4 24, crosshair; }
 #viewport[data-tool="comment"] { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Cpath d='M3 23V8a5 5 0 015-5h10a5 5 0 015 5v6a5 5 0 01-5 5H8z' fill='%232F5BFF' stroke='white' stroke-width='2'/%3E%3C/svg%3E") 3 23, crosshair; }
-#viewport[data-tool="erase"] { cursor: cell; }
+#viewport[data-tool="erase"], #viewport[data-tool="erase"] .shield, #viewport[data-tool="erase"] #ink path { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Ccircle cx='13' cy='13' r='11' fill='rgba(255,255,255,.35)' stroke='%2317171A' stroke-width='1.5'/%3E%3Ccircle cx='13' cy='13' r='12' fill='none' stroke='white' stroke-width='1'/%3E%3C/svg%3E") 13 13, cell; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 
 /* ---------- frames ---------- */
@@ -115,7 +115,7 @@ code { font: 12px/1.5 var(--mono); }
 #ink { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 #ink path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 #ink path.used { opacity: .28; }
-#viewport[data-tool="erase"] #ink path { pointer-events: stroke; cursor: pointer; }
+#viewport[data-tool="erase"] #ink path { pointer-events: stroke; }
 #viewport[data-tool="erase"] #ink path:hover { opacity: .4; }
 
 #hover-box { position: fixed; pointer-events: none; border: 1.5px solid var(--accent); background: var(--accent-soft); border-radius: 3px; z-index: 5; transition: all .06s ease-out; }
