@@ -615,7 +615,7 @@ $('#prompt-ideas').addEventListener('click', e => {
   composerInput.focus(); composerInput.setSelectionRange(composerInput.value.length, composerInput.value.length);
 });
 function closeComposer() {
-  composer.classList.remove('prompt');
+  composer.classList.remove('prompt', 'soft'); softFrom = null;
   const fid = draft?.frameId; draft = null; composer.hidden = true;
   if (fid) renderPins(fid);
 }
@@ -682,6 +682,32 @@ function showInkChip(fid, lx, ly) {
   inkChip = { frameId: fid, lx, ly }; $('#ink-chip').hidden = false; positionPops();
 }
 function hideInkChip() { inkChip = null; $('#ink-chip').hidden = true; }
+// After a pen stroke the comment box fades in next to the drawing, already focused, with the marks attached.
+// Type to keep it; move the mouse away (or start another stroke) without typing and it quietly goes away.
+let softFrom = null;
+function softCommentAfterStroke(frameId, pts, e) {
+  if (!composer.hidden && composerInput.value.trim()) return; // they're already writing
+  if (frameId) {
+    const f = S.frames.find(x => x.id === frameId);
+    const strokes = freshInk(frameId);
+    const xs = strokes.flatMap(s => s.points.filter((_, i) => i % 2 === 0)), ys = strokes.flatMap(s => s.points.filter((_, i) => i % 2 === 1));
+    const lx = (xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : pts[pts.length - 2]) - f.x;
+    const ly = (ys.length ? (Math.min(...ys) + Math.max(...ys)) / 2 : pts[pts.length - 1]) - f.y;
+    openComposer(frameId, lx, ly);
+  } else openComposer(CANVAS, pts[pts.length - 2], pts[pts.length - 1], 'canvas');
+  if (!draft) return;
+  draft.soft = true;
+  composer.classList.add('soft');
+  composerInput.placeholder = 'What should change here?';
+  softFrom = { x: e.clientX, y: e.clientY, t: Date.now() };
+}
+addEventListener('pointermove', e => {
+  if (!draft?.soft || composer.hidden || !softFrom || gesture) return;
+  if (composerInput.value.trim()) { draft.soft = false; composer.classList.remove('soft'); return; }
+  if (composer.contains(e.target) || Date.now() - softFrom.t < 300) return;
+  if (Math.hypot(e.clientX - softFrom.x, e.clientY - softFrom.y) > 140) closeComposer();
+});
+composerInput.addEventListener('input', () => { if (draft?.soft && composerInput.value.trim()) { draft.soft = false; composer.classList.remove('soft'); } });
 $('#ink-chip button').addEventListener('click', () => {
   if (!inkChip) return;
   const strokes = freshInk(inkChip.frameId), f = S.frames.find(x => x.id === inkChip.frameId);
@@ -859,6 +885,7 @@ function startResize(fid, e) {
 }
 function startStroke(e) {
   hideInkChip();
+  if (draft?.soft && !composerInput.value.trim()) closeComposer(); // keep drawing; the box comes back after this stroke
   const p = toWorld(e.clientX, e.clientY);
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('stroke', MARK); path.setAttribute('stroke-width', 3 / view.z);
@@ -998,7 +1025,7 @@ const endGesture = async e => {
       g.path.remove();
       if (!S.strokes.find(x => x.id === s.id)) S.strokes.push(s);
       renderInk();
-      if (frameId) { const f = S.frames.find(x => x.id === frameId); showInkChip(frameId, pts[pts.length - 2] - f.x, pts[pts.length - 1] - f.y); }
+      softCommentAfterStroke(frameId, pts, e);
     } catch (err) { g.path.remove(); toast(err.message); }
   }
 };
