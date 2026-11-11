@@ -177,7 +177,7 @@ function mount(canvas, user) {
     },
   };
   gate.hidden = true;
-  import('./app.js?v=mwbeu2z0');
+  import('./app.js?v=mwbf4srb');
 }
 
 function accountChip(prof) {
