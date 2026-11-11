@@ -1034,6 +1034,7 @@ const endGesture = async e => {
   }
   if (g.type === 'gmove') {
     if (!g.moved) return;
+    spacing = null; renderSpacing(); // moving by hand ends the spacing adjustment
     const before = g.from, after = {};
     for (const id of g.ids) { const d = drag.get(id); drag.delete(id); const f = S.frames.find(x => x.id === id); if (d && f) { Object.assign(f, d); after[id] = { x: d.x, y: d.y }; } }
     patchMany(after);
@@ -1507,15 +1508,9 @@ function alignSelection(how) {
   if (fs.length < 2) return;
   const b = bbox(fs), before = {}, after = {};
   for (const f of fs) before[f.id] = { x: f.x, y: f.y };
-  if (how === 'hdist' || how === 'vdist') {
-    if (fs.length < 3) return toast('Select 3 or more frames to distribute', 1600);
-    const k = how === 'hdist' ? 'x' : 'y', size = how === 'hdist' ? 'w' : 'h';
-    const sorted = [...fs].sort((a, c) => a[k] - c[k]);
-    let gap = ((how === 'hdist' ? b.w : b.h) - sorted.reduce((t, f) => t + f[size], 0)) / (sorted.length - 1);
-    if (gap < 40) gap = 80; // overlapping frames: lay them out with a clean gap instead
-    let at = b[k];
-    for (const f of sorted) { after[f.id] = { ...before[f.id], [k]: Math.round(at) }; at += f[size] + gap; }
-  } else for (const f of fs) {
+  if (how === 'hdist' || how === 'vdist') return startSpacing(how, fs, b, before);
+  spacing = null; renderSpacing();
+  for (const f of fs) {
     const p = { ...before[f.id] };
     if (how === 'left') p.x = b.x; else if (how === 'right') p.x = b.x + b.w - f.w; else if (how === 'hcenter') p.x = Math.round(b.x + b.w / 2 - f.w / 2);
     else if (how === 'top') p.y = b.y; else if (how === 'bottom') p.y = b.y + b.h - f.h; else if (how === 'vcenter') p.y = Math.round(b.y + b.h / 2 - f.h / 2);
@@ -1533,6 +1528,49 @@ async function removeFrames(ids) {
   multi.clear(); renderAlignBar();
   toast(`Deleted ${ids.length} frames — ⌘Z to undo`, 2600);
 }
+// ---------- distribute: frames spread out evenly, then a small live spacing control ----------
+let spacing = null; // { k: 'x'|'y', size: 'w'|'h', ids (in order), start, before, after, gap }
+function startSpacing(how, fs, b, before) {
+  const k = how === 'hdist' ? 'x' : 'y', size = how === 'hdist' ? 'w' : 'h';
+  const sorted = [...fs].sort((a, c) => a[k] - c[k]);
+  let gap = ((k === 'x' ? b.w : b.h) - sorted.reduce((t, f) => t + f[size], 0)) / Math.max(1, sorted.length - 1);
+  if (gap < 40) gap = 80; // overlapping frames: lay them out with a clean gap instead
+  spacing = { k, size, ids: sorted.map(f => f.id), start: sorted[0][k], before, after: null, gap: Math.round(gap) };
+  const sess = spacing;
+  applyGap(sess.gap, true);
+  record(how === 'hdist' ? 'Distribute horizontally' : 'Distribute vertically', () => patchMany(sess.before), () => patchMany(sess.after));
+  renderSpacing();
+}
+function layoutFor(gap) {
+  const sp = spacing, out = {};
+  let at = sp.start;
+  for (const id of sp.ids) { const f = S.frames.find(x => x.id === id); if (!f) continue; out[id] = { ...sp.before[id], [sp.k]: Math.round(at) }; at += f[sp.size] + gap; }
+  return out;
+}
+// live = move frames on screen only (while dragging); commit = save positions (and make them the redo state)
+function applyGap(gap, commit) {
+  if (!spacing) return;
+  gap = Math.max(0, Math.round(gap));
+  spacing.gap = gap;
+  const pos = layoutFor(gap);
+  if (commit) { spacing.after = pos; patchMany(pos); }
+  else { for (const [id, p] of Object.entries(pos)) { const f = S.frames.find(x => x.id === id); if (f) { Object.assign(f, p); updateFrame(f); } } positionAlignBar(); renderAllPins(); }
+  const bar = $('#align-bar'), r = bar.querySelector('.ab-range'), v = bar.querySelector('.ab-val');
+  if (r) { r.max = Math.max(800, gap * 2); r.value = gap; }
+  if (v && document.activeElement !== v) v.value = gap;
+}
+function renderSpacing() {
+  const box = $('#align-bar').querySelector('.ab-spacing'); if (!box) return;
+  box.hidden = !spacing;
+  if (!spacing) return;
+  box.querySelector('.ab-scrub').innerHTML = spacing.k === 'x'
+    ? '<svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg>'
+    : '<svg viewBox="0 0 24 24"><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>';
+  const r = box.querySelector('.ab-range'), v = box.querySelector('.ab-val');
+  r.max = Math.max(800, spacing.gap * 2); r.value = spacing.gap;
+  if (document.activeElement !== v) v.value = spacing.gap;
+  positionAlignBar();
+}
 const ALIGN_ICONS = {
   left: '<path d="M4 3v18"/><rect x="7" y="6" width="11" height="4" rx="1"/><rect x="7" y="14" width="7" height="4" rx="1"/>',
   hcenter: '<path d="M12 3v18"/><rect x="5" y="6" width="14" height="4" rx="1"/><rect x="8" y="14" width="8" height="4" rx="1"/>',
@@ -1548,13 +1586,31 @@ function renderAlignBar() {
   const bar = $('#align-bar');
   if (!S || multi.size < 2 || !isOwner() || ADAPTER) { bar.hidden = true; return; }
   if (!bar.dataset.ready) {
-    bar.innerHTML = `<span class="ab-count"></span><span class="ab-sep"></span>` + ['left', 'hcenter', 'right', '|', 'top', 'vcenter', 'bottom', '|', 'hdist', 'vdist'].map(k => k === '|' ? '<span class="ab-sep"></span>' : `<button data-align="${k}" title="${ALIGN_TITLES[k]}"><svg viewBox="0 0 24 24">${ALIGN_ICONS[k]}</svg></button>`).join('');
+    bar.innerHTML = `<span class="ab-count"></span><span class="ab-sep"></span>` + ['left', 'hcenter', 'right', '|', 'top', 'vcenter', 'bottom', '|', 'hdist', 'vdist'].map(k => k === '|' ? '<span class="ab-sep"></span>' : `<button data-align="${k}" title="${ALIGN_TITLES[k]}"><svg viewBox="0 0 24 24">${ALIGN_ICONS[k]}</svg></button>`).join('')
+      + `<span class="ab-spacing" hidden><span class="ab-sep"></span><span class="ab-scrub" title="Drag left or right to change the spacing"></span>`
+      + `<input class="ab-range" type="range" min="0" max="800" step="1" title="Drag to spread them out or pull them closer">`
+      + `<label class="ab-num" title="Space between frames"><input class="ab-val" inputmode="numeric"><small>px</small></label></span>`;
+    const range = bar.querySelector('.ab-range'), val = bar.querySelector('.ab-val'), scrub = bar.querySelector('.ab-scrub');
+    range.addEventListener('input', () => applyGap(+range.value, false));
+    range.addEventListener('change', () => applyGap(+range.value, true));
+    val.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { applyGap(+val.value || 0, true); val.blur(); } if (e.key === 'Escape') val.blur(); });
+    val.addEventListener('change', () => applyGap(+val.value || 0, true));
+    scrub.addEventListener('pointerdown', e => {
+      if (!spacing) return;
+      e.preventDefault(); scrub.setPointerCapture(e.pointerId);
+      const x0 = e.clientX, g0 = spacing.gap;
+      const mv = ev => applyGap(g0 + (ev.clientX - x0) * 2, false);
+      const up = () => { scrub.removeEventListener('pointermove', mv); scrub.removeEventListener('pointerup', up); applyGap(spacing.gap, true); };
+      scrub.addEventListener('pointermove', mv); scrub.addEventListener('pointerup', up);
+    });
     bar.addEventListener('pointerdown', e => e.stopPropagation());
     bar.addEventListener('click', e => { const b = e.target.closest('[data-align]'); if (b) alignSelection(b.dataset.align); });
     bar.dataset.ready = '1';
   }
   bar.querySelector('.ab-count').textContent = `${multi.size} frames`;
-  bar.querySelectorAll('[data-align$="dist"]').forEach(b => b.disabled = multi.size < 3);
+  bar.querySelectorAll('[data-align$="dist"]').forEach(b => b.disabled = multi.size < 2);
+  if (spacing && (spacing.ids.length !== multi.size || spacing.ids.some(id => !multi.has(id)))) spacing = null;
+  renderSpacing();
   bar.hidden = false;
   positionAlignBar();
 }
