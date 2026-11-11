@@ -274,6 +274,35 @@ code { font: 12px/1.5 var(--mono); }
 .agent-line .a-meta { font: 500 11px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
 .agent-line .a-model { font: 500 10.5px/1 var(--mono); color: var(--muted); padding: 2px 5px; border-radius: 4px; border: 1px solid var(--line); margin-right: 4px; }
 
+/* empty-frame prompt */
+.prompt-head, .prompt-ideas { display: none; }
+#composer.prompt { width: 400px; padding: 14px; }
+#composer.prompt .prompt-head { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; margin-bottom: 10px; }
+#composer.prompt .prompt-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spark { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--accent); color: #fff; font-size: 13px; flex: none; animation: spark 2.4s ease-in-out infinite; }
+@keyframes spark { 50% { transform: rotate(12deg) scale(1.06); } }
+#composer.prompt .prompt-ideas { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.prompt-ideas button { height: 26px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface-2); font-size: 12px; font-weight: 500; color: var(--ink-2); }
+.prompt-ideas button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+#composer.prompt textarea { min-height: 44px; font-size: 14px; }
+.frame.empty .empty-hint b { color: var(--accent); }
+.frame.empty .shield { cursor: pointer; }
+/* renaming */
+.canvas-name.editable { cursor: text; border-radius: 6px; padding: 2px 4px; margin: -2px -4px; }
+.canvas-name.editable:hover { background: var(--surface-2); }
+.canvas-rename { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--accent); border-radius: 6px; padding: 1px 5px; outline: 0; width: 220px; }
+#fp-name { width: 100%; font: 600 13px var(--font); color: var(--ink); border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 3px 5px; margin-left: -5px; outline: 0; }
+#fp-name:hover { border-color: var(--line); }
+#fp-name:focus { border-color: var(--accent); background: var(--surface-2); }
+
+/* area comments */
+.area { position: absolute; pointer-events: none; border: calc(2px / var(--z, 1)) solid var(--accent); background: rgba(47, 91, 255, .10); border-radius: calc(3px / var(--z, 1)); opacity: 0; transition: opacity .15s; }
+.area.show, .area.hover { opacity: 1; }
+.area::before { content: "Area"; position: absolute; left: calc(-2px / var(--z, 1)); bottom: 100%; transform-origin: 0 100%; scale: calc(1 / var(--z, 1)); font: 600 10px/1 var(--font); letter-spacing: .02em; color: #fff; background: var(--accent); padding: 4px 6px; border-radius: 4px 4px 4px 0; margin-bottom: calc(2px / var(--z, 1)); white-space: nowrap; }
+.frame .area.draft, .frame .area.picking { box-shadow: 0 0 0 100000px rgba(10, 12, 20, .22); }
+.area.picking { border-style: dashed; }
+.chip-area { color: var(--accent); background: var(--accent-soft); }
+
 /* comment scope */
 .scope-pick { display: flex; gap: 2px; padding: 3px; margin-bottom: 8px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); }
 .scope-pick button { flex: 1; height: 24px; border-radius: 6px; font-size: 11.5px; font-weight: 500; color: var(--muted); }
