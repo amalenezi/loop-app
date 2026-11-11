@@ -248,7 +248,7 @@ function renderAgentPill() {
   const pill = $('#agent-pill'), n = Object.keys(S.live).length;
   const queued = S.comments.filter(c => c.status === 'queued').length;
   const waiting = S.comments.filter(c => c.status === 'waiting').length;
-  const name = S.agent.mode === 'inbox' ? 'Your agent' : (S.agentBin === 'claude' ? 'Claude Code' : S.agentBin);
+  const name = S.agent.mode === 'inbox' ? 'Your agent' : (S.agentBin === 'claude' ? 'Claude Code' : S.agentBin) + (S.agent.lastModel ? ` · ${prettyModel(S.agent.lastModel)}` : '');
   let label = name;
   if (S.hostOnline === false) label = `Host offline · comments wait`;
   if (n) label += ` · ${n} working`;
@@ -569,15 +569,27 @@ function closeThread() {
   openThreadId = null; threadEl.hidden = true; renderAllPins();
 }
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : new Date(t).toLocaleDateString(); };
+// "claude-opus-5-5" → "Opus 5.5"
+function prettyModel(id) {
+  if (!id) return '';
+  const m = /claude-([a-z]+)-(\d+)(?:-(\d+))?/i.exec(id);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] && m[3].length <= 2 ? '.' + m[3] : ''}` : id;
+}
+function runMeta(c) {
+  const bits = [];
+  if (c.model) bits.push(prettyModel(c.model));
+  if (c.startedAt && c.finishedAt) { const s = Math.round((c.finishedAt - c.startedAt) / 1000); bits.push(s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`); }
+  return bits.length ? `<div class="a-meta">${esc(bits.join(' · '))}</div>` : '';
+}
 const CHECK = '<svg viewBox="0 0 12 12"><path d="M2.5 6.5l2.2 2.2L9.5 3.5"/></svg>';
 function agentLine(c) {
   const owner = isOwner(), live = S.live[c.frameId];
   switch (c.status) {
     case 'waiting': return `<div class="agent-line waiting"><span class="a-ic"></span><div><div>Waiting for the host to send this to the agent.</div>${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Send to agent</button></div>` : ''}</div></div>`;
     case 'queued': return `<div class="agent-line working"><span class="a-ic">${CHECK}</span><div><div class="a-text">${S.agent.mode === 'inbox' ? 'Queued for your agent — run loop inbox --wait' : 'Queued — waiting for the frame to be free'}</div>${owner ? `<div class="a-actions"><button class="quiet" data-act="cancel" data-id="${c.id}">Cancel</button></div>` : ''}</div></div>`;
-    case 'working': return `<div class="agent-line working"><span class="a-ic">${CHECK}</span><div><div><span class="a-text" data-step-for="${c.id}">${esc(live?.commentId === c.id ? live.step : 'Working…')}</span> <span class="muted" data-elapsed-from="${live?.startedAt || c.createdAt}"></span></div>${owner ? `<div class="a-actions"><button class="quiet" data-act="cancel" data-id="${c.id}">Stop</button></div>` : ''}</div></div>`;
-    case 'done': return `<div class="agent-line"><span class="a-ic">${CHECK}</span><div><div>${esc(c.undone ? 'Reverted.' : c.reply || 'Done.')}</div>${owner && c.snapshot && !c.undone ? `<div class="a-actions"><button class="quiet" data-act="undo" data-id="${c.id}">Undo change</button></div>` : ''}</div></div>`;
-    case 'error': return `<div class="agent-line error"><span class="a-ic">${CHECK}</span><div><div>${esc(c.reply || 'Something went wrong.')}</div>${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Retry</button></div>` : ''}</div></div>`;
+    case 'working': return `<div class="agent-line working"><span class="a-ic">${CHECK}</span><div><div>${c.model ? `<span class="a-model">${esc(prettyModel(c.model))}</span> ` : ''}<span class="a-text" data-step-for="${c.id}">${esc(live?.commentId === c.id ? live.step : 'Working…')}</span> <span class="muted" data-elapsed-from="${live?.startedAt || c.createdAt}"></span></div>${owner ? `<div class="a-actions"><button class="quiet" data-act="cancel" data-id="${c.id}">Stop</button></div>` : ''}</div></div>`;
+    case 'done': return `<div class="agent-line"><span class="a-ic">${CHECK}</span><div><div>${esc(c.undone ? 'Reverted.' : c.reply || 'Done.')}</div>${runMeta(c)}${owner && c.snapshot && !c.undone ? `<div class="a-actions"><button class="quiet" data-act="undo" data-id="${c.id}">Undo change</button></div>` : ''}</div></div>`;
+    case 'error': return `<div class="agent-line error"><span class="a-ic">${CHECK}</span><div><div>${esc(c.reply || 'Something went wrong.')}</div>${runMeta(c)}${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Retry</button></div>` : ''}</div></div>`;
     case 'canceled': return `<div class="agent-line waiting"><span class="a-ic"></span><div><div>Stopped.</div>${owner ? `<div class="a-actions"><button data-act="send" data-id="${c.id}">Send again</button></div>` : ''}</div></div>`;
     default: return '';
   }
@@ -849,7 +861,7 @@ document.querySelectorAll('.menu').forEach(m => m.addEventListener('pointerdown'
 addEventListener('pointerdown', e => { if (!e.target.closest('.menu, #agent-pill, #share-btn')) closeMenus(); });
 
 // ---------- new frame ----------
-let newSize = '1280x800';
+let newSize = '1440x1024';
 function openNewFrame() {
   closeMenus(); $('#new-frame').hidden = false;
   const t = $('#new-frame-input'); t.value = ''; setTimeout(() => t.focus(), 0);
